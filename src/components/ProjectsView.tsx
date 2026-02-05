@@ -93,6 +93,11 @@ function ProjectCard({ project, index, onOpen, onDelete }: ProjectCardProps) {
       </div>
       <div className="project-info">
         <h3>{project.name}</h3>
+        {project.id && (
+          <p className="mono small">
+            Project ID: <span>{project.id}</span>
+          </p>
+        )}
         <p className="mono">{project.folderPath}</p>
         <div className="project-stats">
           <span>{project.imageCount || 0} images</span>

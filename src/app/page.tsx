@@ -19,6 +19,7 @@ import * as api from '@/lib/api';
 export default function Home() {
   const [view, setView] = useState('projects');
   const [filter, setFilter] = useState('all');
+  const [search, setSearch] = useState('');
   const [previewImage, setPreviewImage] = useState<any>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [health, setHealth] = useState({ hasGemini: false, hasFirebase: false });
@@ -91,21 +92,48 @@ export default function Home() {
     }
   }, [processing.active, processing.action, fetchJobs]);
 
-  // Filter images based on current filter
+  // Filter images based on current filter and search query
   const filteredImages = useMemo(() => {
+    let base = images;
+
     switch (filter) {
       case 'duplicates':
-        return images.filter(img => img.isDuplicate);
+        base = base.filter(img => img.isDuplicate);
+        break;
       case 'analyzed':
-        return images.filter(img => img.suggestedName);
+        base = base.filter(img => img.suggestedName);
+        break;
       case 'renamed':
-        return images.filter(img => img.renamed);
+        base = base.filter(img => img.renamed);
+        break;
       case 'pending':
-        return images.filter(img => !img.suggestedName && !img.renamed);
+        base = base.filter(img => !img.suggestedName && !img.renamed);
+        break;
       default:
-        return images;
+        break;
     }
-  }, [images, filter]);
+
+    if (!search.trim()) return base;
+
+    const q = search.toLowerCase();
+    return base.filter(img => {
+      const nameMatch =
+        img.currentName?.toLowerCase().includes(q) ||
+        img.originalName?.toLowerCase().includes(q) ||
+        img.suggestedName?.toLowerCase().includes(q);
+
+      const title = img.metadata?.title || '';
+      const desc = img.metadata?.description || img.aiDescription || '';
+      const tags = (img.metadata?.tags || []).join(' ');
+
+      const metaMatch =
+        title.toLowerCase().includes(q) ||
+        desc.toLowerCase().includes(q) ||
+        tags.toLowerCase().includes(q);
+
+      return nameMatch || metaMatch;
+    });
+  }, [images, filter, search]);
 
   // Calculate stats
   const stats = useMemo(() => ({
@@ -137,6 +165,7 @@ export default function Home() {
     setView('projects');
     setCurrentProject(null);
     resetImages();
+    setSearch('');
   };
 
   const handleDeleteProject = async (projectId: string) => {
@@ -243,6 +272,8 @@ export default function Home() {
             stats={stats}
             filter={filter}
             setFilter={setFilter}
+            search={search}
+            setSearch={setSearch}
             selectedImages={selectedImages}
             loading={imagesLoading}
             onScan={handleScanProject}

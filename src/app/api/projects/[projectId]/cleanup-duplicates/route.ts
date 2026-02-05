@@ -75,14 +75,14 @@ export async function POST(
     }
 
     // Create job
-    job = createJob({
+    job = await createJob({
       projectId,
       projectName,
       type: 'cleanup',
       totalItems: duplicatesToDelete.length,
       config: { mode: 'duplicates' }
     });
-    startJob(job.id);
+    await startJob(job.id);
 
     console.log(`🧹 Removing ${duplicatesToDelete.length} duplicate images for project "${projectName}"`);
 
@@ -92,7 +92,7 @@ export async function POST(
     for (let i = 0; i < duplicatesToDelete.length; i++) {
       const img = duplicatesToDelete[i];
 
-      updateJobProgress(job.id, {
+      await updateJobProgress(job.id, {
         processedItems: i,
         successCount,
         errorCount,
@@ -115,7 +115,7 @@ export async function POST(
 
         successCount++;
 
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           successCount,
           currentTarget: {
             name: img.id,
@@ -128,7 +128,7 @@ export async function POST(
       } catch (err: any) {
         errorCount++;
         console.error(`  ❌ Failed to remove duplicate ${img.currentName}:`, err.message);
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           errorCount,
           currentTarget: {
             name: img.id,
@@ -164,7 +164,7 @@ export async function POST(
 
     console.log(`📊 Duplicate cleanup complete: ${removed} removed, ${errorCount} errors`);
 
-    completeJob(job.id, {
+    await completeJob(job.id, {
       status: errorCount > 0 ? 'failed' : 'completed',
       statusMessage: `Removed ${removed} duplicates, ${errorCount} failed`
     });
@@ -180,7 +180,7 @@ export async function POST(
     console.error('❌ Duplicate cleanup error:', error);
 
     if (job) {
-      completeJob(job.id, {
+      await completeJob(job.id, {
         status: 'failed',
         statusMessage: `Duplicate cleanup failed: ${error.message}`
       });

@@ -89,14 +89,14 @@ export async function POST(
     }
     
     // Create job
-    job = createJob({
+    job = await createJob({
       projectId,
       projectName,
       type: 'analyze',
       totalItems: imageIds.length,
       config: { model: getDefaultModel() }
     });
-    startJob(job.id);
+    await startJob(job.id);
     
     console.log(`📋 Analyzing ${imageIds.length} images for project "${projectName}"`);
     console.log(`📋 Job ID: ${job.id}`);
@@ -121,7 +121,7 @@ export async function POST(
       let usedModel = modelName;
       
       // Update job progress
-      updateJobProgress(job.id, {
+      await updateJobProgress(job.id, {
         processedItems: i,
         successCount,
         errorCount,
@@ -138,7 +138,7 @@ export async function POST(
           console.warn(`⚠️ Image not found: ${imageId}`);
           results.push({ imageId, error: 'Image not found', success: false });
           errorCount++;
-          updateJobProgress(job.id, {
+          await updateJobProgress(job.id, {
             errorCount,
             currentTarget: { name: imageId, status: 'failed', error: 'Image not found' }
           });
@@ -156,7 +156,7 @@ export async function POST(
           console.error(`   ❌ File not accessible: ${imagePath}`);
           results.push({ imageId, error: `File not found: ${imagePath}`, success: false });
           errorCount++;
-          updateJobProgress(job.id, {
+          await updateJobProgress(job.id, {
             errorCount,
             currentTarget: { name: imageId, status: 'failed', error: 'File not found' }
           });
@@ -351,7 +351,7 @@ export async function POST(
         results.push({ imageId, error: err.message, success: false });
         errorCount++;
         
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           errorCount,
           currentTarget: { name: imageId, status: 'failed', error: err.message }
         });
@@ -366,7 +366,7 @@ export async function POST(
     }
 
     // Complete the job
-    completeJob(job.id, {
+    await completeJob(job.id, {
       status: errorCount === imageIds.length ? 'failed' : 'completed',
       statusMessage: `Analyzed ${successCount} images, ${errorCount} failed`
     });
@@ -383,7 +383,7 @@ export async function POST(
     console.error('❌ Batch analysis error:', error);
     
     if (job) {
-      completeJob(job.id, {
+      await completeJob(job.id, {
         status: 'failed',
         statusMessage: `Analysis failed: ${error.message}`
       });

@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Job, 
@@ -30,6 +31,43 @@ export function JobViewer({
 }: JobViewerProps) {
   if (!isOpen) return null;
 
+  const [statusFilter, setStatusFilter] = useState<'all' | 'running' | 'completed' | 'failed'>('all');
+
+  const { visibleJobs, stats } = useMemo(() => {
+    const runningStatuses = new Set(['running', 'pending']);
+
+    // Bring running jobs to the top, then sort by createdAt (newest first)
+    const sorted = [...jobs].sort((a, b) => {
+      const aRunning = runningStatuses.has(a.status);
+      const bRunning = runningStatuses.has(b.status);
+      if (aRunning && !bRunning) return -1;
+      if (!aRunning && bRunning) return 1;
+      return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+    });
+
+    const filtered = sorted.filter(job => {
+      switch (statusFilter) {
+        case 'running':
+          return job.status === 'running' || job.status === 'pending';
+        case 'completed':
+          return job.status === 'completed';
+        case 'failed':
+          return job.status === 'failed';
+        default:
+          return true;
+      }
+    });
+
+    const stats = {
+      total: jobs.length,
+      running: jobs.filter(j => runningStatuses.has(j.status)).length,
+      completed: jobs.filter(j => j.status === 'completed').length,
+      failed: jobs.filter(j => j.status === 'failed').length
+    };
+
+    return { visibleJobs: filtered, stats };
+  }, [jobs, statusFilter]);
+
   return (
     <AnimatePresence>
       <motion.div
@@ -56,11 +94,44 @@ export function JobViewer({
             {/* Job List */}
             <div className="job-list">
               <div className="job-list-header">
-                <span>Recent Jobs</span>
-                <span className="job-count">{jobs.length}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <span>Recent Jobs</span>
+                  <div style={{ display: 'flex', gap: 8, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                    <span>Total: {stats.total}</span>
+                    <span>Running: {stats.running}</span>
+                    <span>Completed: {stats.completed}</span>
+                    <span>Failed: {stats.failed}</span>
+                  </div>
+                </div>
+                <div className="job-filters">
+                  <button
+                    className={`job-filter ${statusFilter === 'all' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('all')}
+                  >
+                    All
+                  </button>
+                  <button
+                    className={`job-filter ${statusFilter === 'running' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('running')}
+                  >
+                    Running
+                  </button>
+                  <button
+                    className={`job-filter ${statusFilter === 'completed' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('completed')}
+                  >
+                    Completed
+                  </button>
+                  <button
+                    className={`job-filter ${statusFilter === 'failed' ? 'active' : ''}`}
+                    onClick={() => setStatusFilter('failed')}
+                  >
+                    Failed
+                  </button>
+                </div>
               </div>
               
-              {jobs.length === 0 ? (
+              {visibleJobs.length === 0 ? (
                 <div className="no-jobs">
                   <p>No jobs yet</p>
                   <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '8px' }}>
@@ -69,7 +140,7 @@ export function JobViewer({
                 </div>
               ) : (
                 <div className="job-list-items">
-                  {jobs.map(job => {
+                  {visibleJobs.map(job => {
                     const isRunning = job.status === 'running' || job.status === 'pending';
                     return (
                       <div

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, inMemoryJobs } from '@/lib/jobs';
+import { getDb } from '@/lib/firebase';
 
 // GET /api/jobs/[jobId] - Get single job details
 export async function GET(
@@ -8,7 +9,7 @@ export async function GET(
 ) {
   try {
     const { jobId } = params;
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -35,7 +36,7 @@ export async function DELETE(
 ) {
   try {
     const { jobId } = params;
-    const job = getJob(jobId);
+    const job = await getJob(jobId);
     
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 });
@@ -46,6 +47,15 @@ export async function DELETE(
       job.status = 'cancelled';
       job.completedAt = new Date().toISOString();
       job.statusMessage = 'Job cancelled by user';
+
+      const db = getDb();
+      if (db) {
+        await db.collection('jobs').doc(jobId).update({
+          status: job.status,
+          completedAt: job.completedAt,
+          statusMessage: job.statusMessage
+        });
+      }
     }
     
     // For completed/failed jobs, remove from history
@@ -53,6 +63,10 @@ export async function DELETE(
     const removeFromHistory = searchParams.get('remove') === 'true';
     
     if (removeFromHistory) {
+      const db = getDb();
+      if (db) {
+        await db.collection('jobs').doc(jobId).delete();
+      }
       inMemoryJobs.delete(jobId);
       return NextResponse.json({ success: true, message: 'Job removed from history' });
     }

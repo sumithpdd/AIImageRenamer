@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     const type = searchParams.get('type');
     const limit = parseInt(searchParams.get('limit') || '200');
     
-    let jobs = projectId ? getProjectJobs(projectId) : getAllJobs();
+    let jobs = projectId ? await getProjectJobs(projectId) : await getAllJobs();
     
     // Filter by status if provided
     if (status) {

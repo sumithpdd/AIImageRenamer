@@ -52,14 +52,14 @@ export async function POST(
     }
     
     // Create job
-    job = createJob({
+    job = await createJob({
       projectId,
       projectName,
       type: 'rename',
       totalItems: targetIds.length,
       config: { useAiSuggestion, usePatternClean, useStorage }
     });
-    startJob(job.id);
+    await startJob(job.id);
     
     const results: Array<{
       imageId: string;
@@ -75,7 +75,7 @@ export async function POST(
     for (let i = 0; i < targetIds.length; i++) {
       const imageId = targetIds[i];
       
-      updateJobProgress(job.id, {
+      await updateJobProgress(job.id, {
         processedItems: i,
         successCount,
         errorCount,
@@ -103,9 +103,9 @@ export async function POST(
         }
         
         if (!newName) {
-          results.push({ imageId, success: false, error: 'No suggested name available' });
-          errorCount++;
-          continue;
+        results.push({ imageId, success: false, error: 'No suggested name available' });
+        errorCount++;
+        continue;
         }
         
         const oldPath = imageData.path;
@@ -172,7 +172,7 @@ export async function POST(
         });
         successCount++;
         
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           successCount,
           currentTarget: { 
             name: imageId, 
@@ -186,7 +186,7 @@ export async function POST(
         results.push({ imageId, success: false, error: err.message });
         errorCount++;
         
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           errorCount,
           currentTarget: { name: imageId, status: 'failed', error: err.message }
         });
@@ -201,7 +201,7 @@ export async function POST(
     console.log(`📊 Rename complete: ${successCount} renamed, ${errorCount} errors`);
     
     // Complete the job
-    completeJob(job.id, {
+    await completeJob(job.id, {
       status: errorCount === targetIds.length ? 'failed' : 'completed',
       statusMessage: `Renamed ${successCount} files, ${errorCount} failed`
     });
@@ -217,7 +217,7 @@ export async function POST(
     console.error('❌ Batch rename error:', error);
     
     if (job) {
-      completeJob(job.id, {
+      await completeJob(job.id, {
         status: 'failed',
         statusMessage: `Rename failed: ${error.message}`
       });

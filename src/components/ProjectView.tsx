@@ -1,7 +1,9 @@
 'use client';
 
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ImageCard } from './ImageCard';
+import { getImageUrl } from '@/lib/api';
 
 interface ProjectViewProps {
   project: any;
@@ -9,6 +11,8 @@ interface ProjectViewProps {
   stats: { total: number; analyzed: number; renamed: number; duplicates: number; pending: number };
   filter: string;
   setFilter: (filter: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
   selectedImages: Set<string>;
   loading: boolean;
   onScan: () => void;
@@ -29,7 +33,9 @@ export function ProjectView({
   images, 
   stats, 
   filter, 
-  setFilter, 
+  setFilter,
+  search,
+  setSearch,
   selectedImages, 
   loading,
   onScan, 
@@ -44,6 +50,8 @@ export function ProjectView({
   onRename, 
   onDelete 
 }: ProjectViewProps) {
+  const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -63,6 +71,10 @@ export function ProjectView({
             <ActionBar
               filter={filter}
               setFilter={setFilter}
+              search={search}
+              setSearch={setSearch}
+              viewMode={viewMode}
+              setViewMode={setViewMode}
               selectedImages={selectedImages}
               imageCount={images.length}
               onSelectAll={onSelectAll}
@@ -78,22 +90,63 @@ export function ProjectView({
 
       {images.length === 0 && !loading && <EmptyImages />}
 
-      <div className="image-grid">
-        <AnimatePresence mode="popLayout">
-          {images.map((image, index) => (
-            <ImageCard
-              key={image.id}
-              image={image}
-              index={index}
-              selected={selectedImages.has(image.id)}
-              onToggleSelect={() => onToggleSelect(image.id)}
-              onPreview={() => onPreview(image)}
-              onRename={(newName) => onRename(image, newName)}
-              onDelete={() => onDelete(image)}
-            />
-          ))}
-        </AnimatePresence>
-      </div>
+      {viewMode === 'grid' ? (
+        <div className="image-grid">
+          <AnimatePresence mode="popLayout">
+            {images.map((image, index) => (
+              <ImageCard
+                key={image.id}
+                image={image}
+                index={index}
+                selected={selectedImages.has(image.id)}
+                onToggleSelect={() => onToggleSelect(image.id)}
+                onPreview={() => onPreview(image)}
+                onRename={(newName) => onRename(image, newName)}
+                onDelete={() => onDelete(image)}
+              />
+            ))}
+          </AnimatePresence>
+        </div>
+      ) : (
+        <div className="image-table-wrapper">
+          <table className="image-table">
+            <thead>
+              <tr>
+                <th>Thumbnail</th>
+                <th>Filename</th>
+                <th>Title</th>
+                <th>Description</th>
+                <th>Tags</th>
+                <th>Status</th>
+                <th>Renamed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {images.map((image) => (
+                <tr key={image.id} onClick={() => onPreview(image)}>
+                  <td>
+                    <img
+                      src={getImageUrl(image.path)}
+                      alt={image.currentName}
+                      className="image-table-thumb"
+                    />
+                  </td>
+                  <td className="mono small">{image.currentName}</td>
+                  <td>{image.metadata?.title || ''}</td>
+                  <td className="image-table-description">
+                    {image.metadata?.description || image.aiDescription || ''}
+                  </td>
+                  <td>
+                    {(image.metadata?.tags || []).join(', ')}
+                  </td>
+                  <td>{image.status}</td>
+                  <td>{image.renamed ? 'Yes' : 'No'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -149,6 +202,10 @@ function StatItem({ value, label, className = '' }: { value: number; label: stri
 interface ActionBarProps {
   filter: string;
   setFilter: (filter: string) => void;
+  search: string;
+  setSearch: (value: string) => void;
+  viewMode: 'grid' | 'table';
+  setViewMode: (mode: 'grid' | 'table') => void;
   selectedImages: Set<string>;
   imageCount: number;
   onSelectAll: () => void;
@@ -162,6 +219,10 @@ interface ActionBarProps {
 function ActionBar({ 
   filter, 
   setFilter, 
+  search,
+  setSearch,
+  viewMode,
+  setViewMode,
   selectedImages, 
   imageCount,
   onSelectAll, 
@@ -175,16 +236,42 @@ function ActionBar({
   
   return (
     <div className="action-bar">
-      <div className="filter-tabs">
-        {filters.map(f => (
-          <button 
-            key={f}
-            className={`filter-tab ${filter === f ? 'active' : ''}`}
-            onClick={() => setFilter(f)}
+      <div className="action-bar-left">
+        <div className="filter-tabs">
+          {filters.map(f => (
+            <button 
+              key={f}
+              className={`filter-tab ${filter === f ? 'active' : ''}`}
+              onClick={() => setFilter(f)}
+            >
+              {f.charAt(0).toUpperCase() + f.slice(1)}
+            </button>
+          ))}
+        </div>
+        <div className="search-box">
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name, title, or tags..."
+          />
+        </div>
+        <div className="view-toggle">
+          <button
+            className={viewMode === 'grid' ? 'active' : ''}
+            onClick={() => setViewMode('grid')}
+            title="Grid view"
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)}
+            ▤ Grid
           </button>
-        ))}
+          <button
+            className={viewMode === 'table' ? 'active' : ''}
+            onClick={() => setViewMode('table')}
+            title="Table view"
+          >
+            ☰ Table
+          </button>
+        </div>
       </div>
 
       <div className="actions">

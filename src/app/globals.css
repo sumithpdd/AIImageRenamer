@@ -437,12 +437,58 @@ code, .mono {
   border-radius: var(--radius-lg);
 }
 
+.action-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .filter-tabs {
   display: flex;
   gap: 4px;
   padding: 4px;
   background: var(--bg-secondary);
   border-radius: var(--radius-md);
+}
+
+.search-box input {
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  min-width: 220px;
+}
+
+.search-box input::placeholder {
+  color: var(--text-muted);
+}
+
+.view-toggle {
+  display: inline-flex;
+  margin-left: 8px;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.view-toggle button {
+  padding: 6px 10px;
+  border: none;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.view-toggle button.active {
+  background: var(--accent-primary);
+  color: white;
+}
+
+.view-toggle button + button {
+  border-left: 1px solid var(--border-color);
 }
 
 .filter-tab {
@@ -464,6 +510,53 @@ code, .mono {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Image table view */
+.image-table-wrapper {
+  margin-top: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.image-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.image-table thead {
+  background: var(--bg-secondary);
+}
+
+.image-table th,
+.image-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.image-table tbody tr:hover {
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+
+.image-table-thumb {
+  width: 64px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+}
+
+.image-table-description {
+  max-width: 420px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Buttons */

@@ -8,7 +8,7 @@ import { SUPPORTED_EXTENSIONS, generateCleanName } from '@/lib/helpers';
 import { createJob, startJob, updateJobProgress, completeJob } from '@/lib/jobs';
 import { getImageDimensions, calculateImageMetadata } from '@/lib/utils/image.utils';
 import { getProject, updateProject } from '@/lib/services/project.service';
-import { saveImages, clearProjectImages } from '@/lib/services/image.service';
+import { saveImages, clearProjectImages, getProjectImages } from '@/lib/services/image.service';
 import { uploadImage } from '@/lib/services/storage.service';
 
 export async function POST(
@@ -54,16 +54,29 @@ export async function POST(
     }
     
     // Create job
-    job = createJob({
+    job = await createJob({
       projectId,
       projectName,
       type: 'scan',
       totalItems: files.length,
       config: { uploadToCloud: useCloudStorage }
     });
-    startJob(job.id);
+    await startJob(job.id);
     
-    // Clear existing images for this project
+    // Load existing images so we can preserve AI analysis/rename info on rescan
+    const existingResult = await getProjectImages(projectId);
+    const existingImages = existingResult.success && existingResult.images ? existingResult.images : [];
+
+    // Index existing images by hash for quick lookup
+    const existingByHash = new Map<string, any[]>();
+    for (const img of existingImages) {
+      if (!img.hash) continue;
+      if (!existingByHash.has(img.hash)) existingByHash.set(img.hash, []);
+      existingByHash.get(img.hash)!.push(img);
+    }
+
+    // Clear existing images for this project - we'll recreate them,
+    // but copy over any AI analysis/rename metadata from existingImages.
     await clearProjectImages(projectId);
     
     const images: Omit<ImageData, 'id'>[] = [];
@@ -76,7 +89,7 @@ export async function POST(
       const filePath = path.join(folderPath, file);
       
       // Update job progress
-      updateJobProgress(job.id, {
+      await updateJobProgress(job.id, {
         processedItems: processedCount,
         statusMessage: `Scanning: ${file}`,
         currentTarget: { name: file, status: 'running' }
@@ -145,7 +158,7 @@ export async function POST(
           metadata.colorspace = fileMetadata.colorspace;
         }
 
-        const imageData: Omit<ImageData, 'id'> = {
+        let imageData: Omit<ImageData, 'id'> = {
           projectId,
           originalName: file,
           currentName: file,
@@ -168,9 +181,41 @@ export async function POST(
           metadata
         };
 
+        // If this file matches an existing image (by hash), preserve AI fields
+        const existingList = existingByHash.get(hash) || [];
+        if (existingList.length > 0) {
+          // Prefer an existing entry that matches by path or filename
+          const existing =
+            existingList.find(img => img.path === filePath) ||
+            existingList.find(img => img.currentName === file || img.originalName === file) ||
+            existingList[0];
+
+          if (existing) {
+            imageData = {
+              ...imageData,
+              // Preserve analysis/rename-related fields
+              aiDescription: existing.aiDescription ?? imageData.aiDescription,
+              suggestedName: existing.suggestedName ?? imageData.suggestedName,
+              patternCleanName: existing.patternCleanName ?? imageData.patternCleanName,
+              status: existing.status ?? imageData.status,
+              analyzedAt: existing.analyzedAt ?? imageData.scannedAt,
+              renamed: existing.renamed ?? imageData.renamed,
+              renamedAt: existing.renamedAt ?? imageData.renamedAt,
+              isDuplicate: existing.isDuplicate ?? imageData.isDuplicate,
+              duplicateOf: existing.duplicateOf ?? imageData.duplicateOf,
+              storageUrl: existing.storageUrl ?? imageData.storageUrl,
+              storagePath: existing.storagePath ?? imageData.storagePath,
+              metadata: {
+                ...(existing.metadata || {}),
+                ...(imageData.metadata || {})
+              }
+            };
+          }
+        }
+
         images.push(imageData);
         
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           successCount: images.length,
           currentTarget: {
             name: file,
@@ -186,7 +231,7 @@ export async function POST(
         
       } catch (err: any) {
         console.error(`  ❌ Error: ${err.message}`);
-        updateJobProgress(job.id, {
+        await updateJobProgress(job.id, {
           errorCount: (job.errorCount || 0) + 1,
           currentTarget: { name: file, status: 'failed', error: err.message }
         });
@@ -217,19 +262,23 @@ export async function POST(
 
     // Save all images using service
     await saveImages(projectId, images);
-    
+
+    // Recompute project stats from images (preserving analysis/rename counts)
+    const analyzedCount = images.filter(img => !!img.suggestedName).length;
+    const renamedCount = images.filter(img => !!img.renamed).length;
+
     // Update project stats
     await updateProject(projectId, {
       imageCount: images.length,
-      analyzedCount: 0,
-      renamedCount: 0,
+      analyzedCount,
+      renamedCount,
       status: 'scanned'
     });
     
     console.log('💾 Saved to database');
 
     // Complete the job
-    completeJob(job.id, {
+    await completeJob(job.id, {
       status: 'completed',
       statusMessage: useCloudStorage 
         ? `Scanned ${images.length} images, ${uploadedCount} uploaded (${skippedCount} skipped), ${duplicateCount} duplicates`
@@ -256,7 +305,7 @@ export async function POST(
     console.error('❌ Scan error:', error);
     
     if (job) {
-      completeJob(job.id, {
+      await completeJob(job.id, {
         status: 'failed',
         statusMessage: `Scan failed: ${error.message}`
       });
