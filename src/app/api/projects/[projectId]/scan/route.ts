@@ -242,7 +242,7 @@ export async function POST(
 
     // Mark duplicates
     let duplicateCount = 0;
-    for (const [hash, fileNames] of duplicateHashes) {
+    for (const [hash, fileNames] of Array.from(duplicateHashes.entries())) {
       if (fileNames.length > 1) {
         duplicateCount += fileNames.length;
         images.forEach(img => {

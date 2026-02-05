@@ -66,7 +66,7 @@ export async function GET(
       `attachment; filename="${safeName || 'images'}.zip"`
     );
 
-    return new NextResponse(zipBuffer, {
+    return new NextResponse(new Uint8Array(zipBuffer), {
       status: 200,
       headers
     });

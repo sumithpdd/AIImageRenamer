@@ -90,7 +90,7 @@ export function generateImageId(hash: string, originalName: string): string {
 // Helper to get images for a project
 export function getProjectImages(projectId: string): ImageData[] {
   const images: ImageData[] = [];
-  for (const img of inMemoryImages.values()) {
+  for (const img of Array.from(inMemoryImages.values())) {
     if (img.projectId === projectId) {
       images.push(img);
     }
@@ -114,7 +114,7 @@ export function updateImage(imageId: string, updates: Partial<ImageData>): Image
 // Helper to delete images for a project
 export function clearProjectImages(projectId: string): number {
   let count = 0;
-  for (const [key, img] of inMemoryImages) {
+  for (const [key, img] of Array.from(inMemoryImages.entries())) {
     if (img.projectId === projectId) {
       inMemoryImages.delete(key);
       count++;

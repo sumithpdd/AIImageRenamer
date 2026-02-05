@@ -159,8 +159,7 @@ export async function POST(
           storageUrl,
           storagePath,
           metadata: {
-            ...imageData.metadata,
-            lastModified: now
+            ...imageData.metadata
           }
         });
         

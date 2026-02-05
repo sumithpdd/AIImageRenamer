@@ -306,9 +306,7 @@ export async function POST(
           moodId: moodItem ? moodItem.id : undefined,
           confidence: analysisResult.confidence || 0.8,
           analysisModel: usedModel,
-          analysisError: null,
-          analyzedAt: now,
-          lastModified: now
+          analysisError: null
         };
 
         // Update using service
@@ -338,13 +336,11 @@ export async function POST(
         console.error(`   ❌ Error: ${err.message}`);
         
         // Save error using service
-        const now = new Date().toISOString();
         await updateImage(projectId, imageId, {
           status: 'error',
           metadata: {
             analysisError: err.message,
-            analysisModel: usedModel,
-            lastModified: now
+            analysisModel: usedModel
           }
         });
         

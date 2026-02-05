@@ -50,3 +50,4 @@ Thumbs.db
 # Old project files (can be deleted after migration)
 client/
 server/
+.vercel

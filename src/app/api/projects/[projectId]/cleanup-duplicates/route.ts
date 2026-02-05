@@ -52,7 +52,7 @@ export async function POST(
     const duplicatesToDelete: any[] = [];
     const primaries: any[] = [];
 
-    for (const [, group] of groups) {
+    for (const group of Array.from(groups.values())) {
       if (group.length <= 1) continue;
 
       // Sort by originalName so we keep the "first" deterministically
@@ -147,8 +147,7 @@ export async function POST(
           isDuplicate: false,
           duplicateOf: null,
           metadata: {
-            ...primary.metadata,
-            lastModified: now
+            ...primary.metadata
           }
         });
       } catch (err: any) {

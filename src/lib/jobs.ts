@@ -262,7 +262,7 @@ export async function getProjectJobs(projectId: string): Promise<Job[]> {
   }
 
   const jobs: Job[] = [];
-  for (const job of inMemoryJobs.values()) {
+  for (const job of Array.from(inMemoryJobs.values())) {
     if (job.projectId === projectId) {
       jobs.push(job);
     }

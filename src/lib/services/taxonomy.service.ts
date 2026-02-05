@@ -47,7 +47,7 @@ export async function listTaxonomies(
     }
 
     const items: TaxonomyItem[] = [];
-    for (const item of inMemoryTaxonomies.values()) {
+    for (const item of Array.from(inMemoryTaxonomies.values())) {
       if (!type || item.type === type) {
         items.push(item);
       }
@@ -210,7 +210,7 @@ export async function deleteTaxonomy(
     }
 
     // In-memory
-    for (const [key, item] of inMemoryTaxonomies.entries()) {
+    for (const [key, item] of Array.from(inMemoryTaxonomies.entries())) {
       if (item.id === id) {
         inMemoryTaxonomies.delete(key);
         break;
