@@ -41,6 +41,7 @@ export function ImageCard({
   const cardClasses = [
     'image-card',
     selected && 'selected',
+    image.isNew && 'new',
     image.isDuplicate && 'duplicate',
     image.renamed && 'renamed'
   ].filter(Boolean).join(' ');
@@ -103,6 +104,9 @@ function Checkbox({ selected, onToggle }: { selected: boolean; onToggle: () => v
 function Badges({ image }: { image: any }) {
   return (
     <>
+      {image.isNew && (
+        <div className="badge new-badge" title="New in last scan">New</div>
+      )}
       {image.isDuplicate && (
         <div className="badge duplicate-badge" title="Duplicate">⚠️</div>
       )}

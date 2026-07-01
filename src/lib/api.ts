@@ -39,20 +39,53 @@ export const fetchImages = async (projectId: string) => {
   return res.json();
 };
 
-export const scanFolder = async (projectId: string) => {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/scan`, {
-    method: 'POST'
-  });
-  return res.json();
+type AsyncJobResponse = {
+  accepted?: boolean;
+  jobId?: string;
+  status?: string;
+  message?: string;
+  error?: string;
+  totalItems?: number;
+  // Sync response fields
+  success?: boolean;
+  images?: any[];
+  imageCount?: number;
+  duplicateCount?: number;
+  newCount?: number;
+  results?: any[];
+  analyzed?: number;
+  errors?: number;
+  renamed?: number;
+  removed?: number;
+  kept?: number;
 };
 
-export const analyzeImagesBatch = async (projectId: string, imageIds: string[]) => {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/analyze-batch`, {
+async function startAsyncJob(url: string, options?: RequestInit): Promise<AsyncJobResponse> {
+  const res = await fetch(url, options);
+  const data = await res.json();
+  if (!res.ok && !data.jobId) {
+    throw new Error(data.error || `Request failed (${res.status})`);
+  }
+  return data;
+}
+
+export const scanFolder = async (projectId: string, asyncMode = true) => {
+  const query = asyncMode ? '?async=true' : '?async=false';
+  return startAsyncJob(`${API_BASE}/projects/${projectId}/scan${query}`, { method: 'POST' });
+};
+
+export const rescanFolder = async (projectId: string, asyncMode = true) => {
+  const query = asyncMode ? '?mode=rescan&async=true' : '?mode=rescan&async=false';
+  return startAsyncJob(`${API_BASE}/projects/${projectId}/scan${query}`, { method: 'POST' });
+};
+
+export const analyzeImagesBatch = async (projectId: string, imageIds: string[], asyncMode = true) => {
+  const query = asyncMode ? '?async=true' : '?async=false';
+  return startAsyncJob(`${API_BASE}/projects/${projectId}/analyze-batch${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ imageIds })
   });
-  return res.json();
 };
 
 export const renameImage = async (projectId: string, imageId: string, newName: string) => {
@@ -67,14 +100,15 @@ export const renameImage = async (projectId: string, imageId: string, newName: s
 export const renameImagesBatch = async (
   projectId: string, 
   imageIds: string[], 
-  options: { useAiSuggestion?: boolean; usePatternClean?: boolean }
+  options: { useAiSuggestion?: boolean; usePatternClean?: boolean },
+  asyncMode = true
 ) => {
-  const res = await fetch(`${API_BASE}/projects/${projectId}/rename-batch`, {
+  const query = asyncMode ? '?async=true' : '?async=false';
+  return startAsyncJob(`${API_BASE}/projects/${projectId}/rename-batch${query}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ imageIds, ...options })
   });
-  return res.json();
 };
 
 export const deleteImage = async (projectId: string, imageId: string, deleteFile = false) => {

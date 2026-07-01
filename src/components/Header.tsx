@@ -10,6 +10,7 @@ interface HeaderProps {
   currentProject: any;
   onBackToProjects: () => void;
   jobs?: Job[];
+  runningJobs?: Job[];
   onOpenJobs?: () => void;
 }
 
@@ -19,8 +20,10 @@ export function Header({
   currentProject, 
   onBackToProjects,
   jobs = [],
+  runningJobs = [],
   onOpenJobs 
 }: HeaderProps) {
+  const activeCount = runningJobs.length;
   return (
     <header className="header">
       <motion.div 
@@ -57,9 +60,21 @@ export function Header({
           >
             <span>📋</span>
             <span>Jobs</span>
-            {jobs.length > 0 && (
+            {activeCount > 0 ? (
               <span style={{ 
-                background: jobs.some(j => j.status === 'running') ? '#3b82f6' : '#6b7280',
+                background: '#3b82f6',
+                color: 'white',
+                padding: '2px 8px',
+                borderRadius: '10px',
+                fontSize: '0.75rem',
+                fontWeight: '600',
+                animation: 'pulse 2s infinite'
+              }}>
+                {activeCount} running
+              </span>
+            ) : jobs.length > 0 ? (
+              <span style={{ 
+                background: '#6b7280',
                 color: 'white',
                 padding: '2px 8px',
                 borderRadius: '10px',
@@ -68,7 +83,7 @@ export function Header({
               }}>
                 {jobs.length}
               </span>
-            )}
+            ) : null}
           </button>
         )}
         

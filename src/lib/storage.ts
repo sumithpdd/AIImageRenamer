@@ -7,6 +7,7 @@ export interface Project {
   description: string;
   createdAt: string;
   updatedAt: string;
+  lastScannedAt?: string;
   imageCount: number;
   analyzedCount: number;
   renamedCount: number;
@@ -61,6 +62,8 @@ export interface ImageData {
   createdAt: string;
   modifiedAt: string;
   scannedAt: string;
+  firstSeenAt?: string;
+  isNew?: boolean;
   status: string;
   aiDescription: string | null;
   suggestedName: string | null;

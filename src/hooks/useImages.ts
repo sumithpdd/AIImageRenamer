@@ -1,25 +1,42 @@
+'use client';
+
 import { useState, useCallback } from 'react';
 import * as api from '@/lib/api';
 
 export function useImages(
   showNotification: (msg: string, type?: string) => void, 
-  refreshProject: () => Promise<void>
+  refreshProject: () => Promise<void>,
+  onJobStarted?: (jobId: string, action: string) => void
 ) {
   const [images, setImages] = useState<any[]>([]);
   const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
-  const [processing, setProcessing] = useState({ 
-    active: false, 
-    current: 0, 
-    total: 0, 
-    action: '' 
-  });
+  const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
+
+  const startAction = useCallback((action: string) => {
+    setPendingActions(prev => new Set(prev).add(action));
+  }, []);
+
+  const endAction = useCallback((action: string) => {
+    setPendingActions(prev => {
+      const next = new Set(prev);
+      next.delete(action);
+      return next;
+    });
+  }, []);
+
+  const isActionPending = useCallback(
+    (action: string) => pendingActions.has(action),
+    [pendingActions]
+  );
 
   const loadImages = useCallback(async (projectId: string) => {
     try {
       const data = await api.fetchImages(projectId);
       if (data.images && data.images.length > 0) {
         setImages(data.images);
+      } else if (data.images) {
+        setImages([]);
       }
     } catch (err) {
       console.error('Failed to load images:', err);
@@ -27,40 +44,83 @@ export function useImages(
   }, []);
 
   const scanFolder = useCallback(async (projectId: string) => {
-    setLoading(true);
+    const action = 'scan';
+    startAction(action);
     try {
       const data = await api.scanFolder(projectId);
       if (data.error) {
         showNotification(data.error, 'error');
-      } else {
-        setImages(data.images || []);
-        showNotification(`Found ${data.imageCount} images, ${data.duplicateCount} duplicates`);
-        refreshProject();
+        endAction(action);
+        return null;
       }
+      if (data.accepted && data.jobId) {
+        showNotification(data.message || 'Scan started in background');
+        onJobStarted?.(data.jobId, 'scan');
+        return data.jobId;
+      }
+      setImages(data.images || []);
+      showNotification(`Found ${data.imageCount} images, ${data.duplicateCount} duplicates`);
+      refreshProject();
+      endAction(action);
+      return data.jobId || null;
     } catch (err) {
       showNotification('Failed to scan folder', 'error');
+      endAction(action);
+      return null;
     }
-    setLoading(false);
-  }, [showNotification, refreshProject]);
+  }, [showNotification, refreshProject, onJobStarted, startAction, endAction]);
+
+  const rescanFolder = useCallback(async (projectId: string) => {
+    const action = 'rescan';
+    startAction(action);
+    try {
+      const data = await api.rescanFolder(projectId);
+      if (data.error) {
+        showNotification(data.error, 'error');
+        endAction(action);
+        return null;
+      }
+      if (data.accepted && data.jobId) {
+        showNotification(data.message || 'Rescan started in background');
+        onJobStarted?.(data.jobId, 'rescan');
+        return data.jobId;
+      }
+      await loadImages(projectId);
+      const newCount = data.newCount ?? data.imageCount ?? 0;
+      showNotification(newCount > 0 ? `Rescan found ${newCount} new images` : 'Rescan: no new images found');
+      refreshProject();
+      endAction(action);
+      return data.jobId || null;
+    } catch (err) {
+      showNotification('Failed to rescan folder', 'error');
+      endAction(action);
+      return null;
+    }
+  }, [showNotification, refreshProject, loadImages, onJobStarted, startAction, endAction]);
 
   const analyzeImages = useCallback(async (projectId: string, imageIds: string[]) => {
     if (imageIds.length === 0) {
       showNotification('No images to analyze', 'warning');
-      return;
+      return null;
     }
 
-    setProcessing({ active: true, current: 0, total: imageIds.length, action: 'Analyzing' });
-
+    const action = 'analyze';
+    startAction(action);
     try {
       const data = await api.analyzeImagesBatch(projectId, imageIds);
-      
-      // Check for API-level error
-      if (data.error && !data.results) {
+
+      if (data.error && !data.accepted) {
         showNotification(data.error, 'error');
-        setProcessing({ active: false, current: 0, total: 0, action: '' });
-        return;
+        endAction(action);
+        return null;
       }
-      
+
+      if (data.accepted && data.jobId) {
+        showNotification(`Analyzing ${data.totalItems || imageIds.length} images in background`);
+        onJobStarted?.(data.jobId, 'analyze');
+        return data.jobId;
+      }
+
       const resultsMap = new Map((data.results || []).map((r: any) => [r.imageId, r]));
       setImages(prev => prev.map(img => {
         const result = resultsMap.get(img.id) as any;
@@ -73,55 +133,53 @@ export function useImages(
             aiDescription: result.metadata?.description || img.aiDescription
           };
         } else if (result && !result.success) {
-          // Mark as error
           return {
             ...img,
             status: 'error',
-            metadata: {
-              ...img.metadata,
-              analysisError: result.error
-            }
+            metadata: { ...img.metadata, analysisError: result.error }
           };
         }
         return img;
       }));
 
-      // Show appropriate notification
       const errors = data.errors || 0;
       const analyzed = data.analyzed || 0;
-      
       if (errors > 0 && analyzed > 0) {
         showNotification(`Analyzed ${analyzed} images, ${errors} failed`, 'warning');
       } else if (errors > 0 && analyzed === 0) {
         showNotification(`Analysis failed for all ${errors} images`, 'error');
       } else if (analyzed > 0) {
         showNotification(`Successfully analyzed ${analyzed} images`);
-      } else {
-        showNotification('No images were analyzed', 'warning');
       }
-      
       refreshProject();
+      endAction(action);
+      return data.jobId || null;
     } catch (err: any) {
-      console.error('Analysis error:', err);
       showNotification(err.message || 'Analysis failed', 'error');
+      endAction(action);
+      return null;
     }
-    
-    setProcessing({ active: false, current: 0, total: 0, action: '' });
-  }, [showNotification, refreshProject]);
+  }, [showNotification, refreshProject, onJobStarted, startAction, endAction]);
 
   const renameWithAI = useCallback(async (projectId: string) => {
     const imageIds = images.filter(img => img.suggestedName && !img.renamed).map(img => img.id);
     if (imageIds.length === 0) {
       showNotification('No AI suggestions available', 'warning');
-      return;
+      return null;
     }
 
-    setProcessing({ active: true, current: 0, total: imageIds.length, action: 'Renaming' });
-
+    const action = 'rename';
+    startAction(action);
     try {
       const data = await api.renameImagesBatch(projectId, imageIds, { useAiSuggestion: true });
-      
-      const resultsMap = new Map(data.results.map((r: any) => [r.imageId, r]));
+
+      if (data.accepted && data.jobId) {
+        showNotification(`Renaming ${data.totalItems || imageIds.length} images in background`);
+        onJobStarted?.(data.jobId, 'rename');
+        return data.jobId;
+      }
+
+      const resultsMap = new Map((data.results || []).map((r: any) => [r.imageId, r]));
       setImages(prev => prev.map(img => {
         const result = resultsMap.get(img.id) as any;
         if (result && result.success) {
@@ -132,26 +190,34 @@ export function useImages(
 
       showNotification(`Renamed ${data.renamed} images`);
       refreshProject();
+      endAction(action);
+      return data.jobId || null;
     } catch (err) {
       showNotification('Rename failed', 'error');
+      endAction(action);
+      return null;
     }
-    
-    setProcessing({ active: false, current: 0, total: 0, action: '' });
-  }, [images, showNotification, refreshProject]);
+  }, [images, showNotification, refreshProject, onJobStarted, startAction, endAction]);
 
   const cleanPatterns = useCallback(async (projectId: string) => {
     const imageIds = images.filter(img => img.patternCleanName && !img.renamed).map(img => img.id);
     if (imageIds.length === 0) {
       showNotification('No pattern-based names available', 'warning');
-      return;
+      return null;
     }
 
-    setProcessing({ active: true, current: 0, total: imageIds.length, action: 'Cleaning' });
-
+    const action = 'clean';
+    startAction(action);
     try {
       const data = await api.renameImagesBatch(projectId, imageIds, { usePatternClean: true });
-      
-      const resultsMap = new Map(data.results.map((r: any) => [r.imageId, r]));
+
+      if (data.accepted && data.jobId) {
+        showNotification(`Cleaning ${data.totalItems || imageIds.length} filenames in background`);
+        onJobStarted?.(data.jobId, 'rename');
+        return data.jobId;
+      }
+
+      const resultsMap = new Map((data.results || []).map((r: any) => [r.imageId, r]));
       setImages(prev => prev.map(img => {
         const result = resultsMap.get(img.id) as any;
         if (result && result.success) {
@@ -162,40 +228,50 @@ export function useImages(
 
       showNotification(`Cleaned ${data.renamed} filenames`);
       refreshProject();
+      endAction(action);
+      return data.jobId || null;
     } catch (err) {
       showNotification('Cleanup failed', 'error');
+      endAction(action);
+      return null;
     }
-    
-    setProcessing({ active: false, current: 0, total: 0, action: '' });
-  }, [images, showNotification, refreshProject]);
+  }, [images, showNotification, refreshProject, onJobStarted, startAction, endAction]);
 
   const removeDuplicates = useCallback(async (projectId: string) => {
-    setProcessing({ active: true, current: 0, total: 0, action: 'Removing duplicates' });
-
+    const action = 'duplicates';
+    startAction(action);
     try {
       const data = await api.cleanupDuplicates(projectId);
 
       if (data.error) {
         showNotification(data.error, 'error');
+      } else if (data.accepted && data.jobId) {
+        showNotification('Duplicate cleanup started in background');
+        onJobStarted?.(data.jobId, 'cleanup');
+        return data.jobId;
       } else {
         const removed = data.removed || 0;
         const kept = data.kept ?? images.length - removed;
         showNotification(`Removed ${removed} duplicates, kept ${kept} images`);
 
-        // Reload images so UI reflects removals
         const refreshed = await api.fetchImages(projectId);
         if (refreshed.images) {
           setImages(refreshed.images);
         }
         await refreshProject();
       }
+      endAction(action);
+      return data.jobId || null;
     } catch (err: any) {
-      console.error('Duplicate cleanup error:', err);
       showNotification(err.message || 'Failed to remove duplicates', 'error');
+      endAction(action);
+      return null;
     }
+  }, [images.length, showNotification, refreshProject, onJobStarted, startAction, endAction]);
 
-    setProcessing({ active: false, current: 0, total: 0, action: '' });
-  }, [images.length, showNotification, refreshProject]);
+  const clearPendingAction = useCallback((action: string) => {
+    endAction(action);
+  }, [endAction]);
 
   const renameSingleImage = useCallback(async (projectId: string, image: any, newName: string) => {
     try {
@@ -250,15 +326,19 @@ export function useImages(
   const resetImages = useCallback(() => {
     setImages([]);
     setSelectedImages(new Set());
+    setPendingActions(new Set());
   }, []);
 
   return {
     images,
     selectedImages,
     loading,
-    processing,
+    pendingActions,
+    isActionPending,
+    clearPendingAction,
     loadImages,
     scanFolder,
+    rescanFolder,
     analyzeImages,
     renameWithAI,
     cleanPatterns,

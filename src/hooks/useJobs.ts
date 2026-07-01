@@ -31,12 +31,17 @@ export interface Job {
   config?: Record<string, any>;
 }
 
-export function useJobs(projectId?: string) {
+export function useJobs(projectId?: string, options?: {
+  onJobComplete?: (job: Job) => void;
+}) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const prevJobsRef = useRef<Map<string, Job['status']>>(new Map());
+  const onJobCompleteRef = useRef(options?.onJobComplete);
+  onJobCompleteRef.current = options?.onJobComplete;
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -47,7 +52,26 @@ export function useJobs(projectId?: string) {
       const data = await res.json();
       
       if (data.jobs) {
-        setJobs(data.jobs);
+        const nextJobs: Job[] = data.jobs;
+        setJobs(nextJobs);
+
+        // Fire completion callbacks when jobs transition to terminal states
+        if (onJobCompleteRef.current) {
+          for (const job of nextJobs) {
+            const prevStatus = prevJobsRef.current.get(job.id);
+            const isTerminal = job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled';
+            const wasRunning = prevStatus === 'running' || prevStatus === 'pending';
+            if (wasRunning && isTerminal) {
+              onJobCompleteRef.current(job);
+            }
+          }
+        }
+
+        const nextStatusMap = new Map<string, Job['status']>();
+        for (const job of nextJobs) {
+          nextStatusMap.set(job.id, job.status);
+        }
+        prevJobsRef.current = nextStatusMap;
         
         // Update selected job if it exists
         if (selectedJob) {
@@ -159,11 +183,17 @@ export function useJobs(projectId?: string) {
     fetchJobs();
   }, [fetchJobs]);
 
-  const hasRunningJobs = jobs.some(j => j.status === 'running');
+  const hasRunningJobs = jobs.some(j => j.status === 'running' || j.status === 'pending');
+  const runningJobs = jobs.filter(j => j.status === 'running' || j.status === 'pending');
+  const projectRunningJobs = projectId
+    ? runningJobs.filter(j => j.projectId === projectId)
+    : runningJobs;
   const recentJobs = jobs.slice(0, 10);
 
   return {
     jobs,
+    runningJobs,
+    projectRunningJobs,
     recentJobs,
     selectedJob,
     loading,

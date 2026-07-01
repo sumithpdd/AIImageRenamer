@@ -413,6 +413,7 @@ code, .mono {
 }
 
 .stat-value.analyzed { color: var(--accent-primary); }
+.stat-value.new { color: #38bdf8; }
 .stat-value.renamed { color: var(--success); }
 .stat-value.duplicates { color: var(--warning); }
 .stat-value.pending { color: var(--text-muted); }
@@ -682,6 +683,7 @@ code, .mono {
 
 .image-card:hover { border-color: var(--border-accent); transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .image-card.selected { border-color: var(--accent-primary); box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3); }
+.image-card.new { border-color: rgba(56, 189, 248, 0.75); }
 .image-card.duplicate { border-color: var(--warning); }
 .image-card.renamed { border-color: var(--success); }
 
@@ -726,6 +728,15 @@ code, .mono {
 
 .duplicate-badge { background: var(--warning); }
 .renamed-badge { background: var(--success); right: 40px; }
+.new-badge {
+  background: rgba(56, 189, 248, 0.9);
+  color: rgba(0, 0, 0, 0.9);
+  right: 70px;
+  width: auto;
+  padding: 0 8px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+}
 
 .card-image {
   position: relative;
@@ -1893,4 +1904,122 @@ code, .mono {
   .job-info-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==================== Running Jobs Bar ==================== */
+
+.running-jobs-bar {
+  margin-bottom: 20px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), var(--bg-card));
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  border-radius: var(--radius-lg);
+}
+
+.running-jobs-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.running-jobs-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.running-jobs-pulse {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #3b82f6;
+  animation: pulse 1.5s infinite;
+}
+
+.running-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.running-job-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  color: inherit;
+  transition: var(--transition);
+}
+
+.running-job-card:hover {
+  border-color: var(--accent-primary);
+  background: var(--bg-hover);
+}
+
+.running-job-icon {
+  font-size: 1.25rem;
+  line-height: 1;
+  margin-top: 2px;
+}
+
+.running-job-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.running-job-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
+}
+
+.running-job-message {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.running-job-progress-track {
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.running-job-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.running-job-stats {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.running-job-status {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 0.8rem;
 }

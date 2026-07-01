@@ -102,5 +102,6 @@ export function isFirebaseConfigured(): boolean {
 }
 
 export function isStorageConfigured(): boolean {
+  if (process.env.DISABLE_CLOUD_STORAGE === 'true') return false;
   return bucket !== null;
 }

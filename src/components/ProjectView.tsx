@@ -8,14 +8,17 @@ import { getImageUrl } from '@/lib/api';
 interface ProjectViewProps {
   project: any;
   images: any[];
-  stats: { total: number; analyzed: number; renamed: number; duplicates: number; pending: number };
+  stats: { total: number; new: number; analyzed: number; renamed: number; duplicates: number; pending: number };
   filter: string;
   setFilter: (filter: string) => void;
   search: string;
   setSearch: (value: string) => void;
   selectedImages: Set<string>;
   loading: boolean;
+  isBusy?: boolean;
+  isActionPending?: (action: string) => boolean;
   onScan: () => void;
+  onRescan: () => void;
   onAnalyzeSelected: () => void;
   onAnalyzeAll: () => void;
   onRenameWithAI: () => void;
@@ -38,7 +41,10 @@ export function ProjectView({
   setSearch,
   selectedImages, 
   loading,
+  isBusy = false,
+  isActionPending,
   onScan, 
+  onRescan,
   onAnalyzeSelected, 
   onAnalyzeAll, 
   onRenameWithAI, 
@@ -62,7 +68,9 @@ export function ProjectView({
           projectId={project?.id}
           folderPath={project?.folderPath}
           loading={loading}
+          isBusy={isBusy}
           onScan={onScan}
+          onRescan={onRescan}
         />
 
         {images.length > 0 && (
@@ -77,6 +85,7 @@ export function ProjectView({
               setViewMode={setViewMode}
               selectedImages={selectedImages}
               imageCount={images.length}
+              isActionPending={isActionPending}
               onSelectAll={onSelectAll}
               onCleanPatterns={onCleanPatterns}
               onRemoveDuplicates={onRemoveDuplicates}
@@ -151,7 +160,8 @@ export function ProjectView({
   );
 }
 
-function ControlRow({ projectId, folderPath, loading, onScan }: { projectId: string; folderPath: string; loading: boolean; onScan: () => void }) {
+function ControlRow({ projectId, folderPath, loading, isBusy, onScan, onRescan }: { projectId: string; folderPath: string; loading: boolean; isBusy: boolean; onScan: () => void; onRescan: () => void }) {
+  const scanDisabled = loading || isBusy;
   return (
     <div className="control-row">
       <div className="folder-display">
@@ -161,8 +171,11 @@ function ControlRow({ projectId, folderPath, loading, onScan }: { projectId: str
         <span className="mono">{folderPath}</span>
       </div>
       <div style={{ display: 'flex', gap: '8px' }}>
-        <button className="btn-secondary" onClick={onScan} disabled={loading}>
-          {loading ? <span className="spinner" /> : 'Scan Folder'}
+        <button className="btn-secondary" onClick={onScan} disabled={scanDisabled}>
+          {scanDisabled ? <span className="spinner" /> : 'Scan Folder'}
+        </button>
+        <button className="btn-secondary" onClick={onRescan} disabled={scanDisabled} title="Only add newly detected files since the last scan">
+          {scanDisabled ? <span className="spinner" /> : 'Rescan Folder'}
         </button>
         {projectId && (
           <a
@@ -178,10 +191,11 @@ function ControlRow({ projectId, folderPath, loading, onScan }: { projectId: str
   );
 }
 
-function StatsBar({ stats }: { stats: { total: number; analyzed: number; renamed: number; duplicates: number; pending: number } }) {
+function StatsBar({ stats }: { stats: { total: number; new: number; analyzed: number; renamed: number; duplicates: number; pending: number } }) {
   return (
     <div className="stats-bar">
       <StatItem value={stats.total} label="Total" />
+      <StatItem value={stats.new} label="New" className="new" />
       <StatItem value={stats.analyzed} label="Analyzed" className="analyzed" />
       <StatItem value={stats.renamed} label="Renamed" className="renamed" />
       <StatItem value={stats.duplicates} label="Duplicates" className="duplicates" />
@@ -208,6 +222,7 @@ interface ActionBarProps {
   setViewMode: (mode: 'grid' | 'table') => void;
   selectedImages: Set<string>;
   imageCount: number;
+  isActionPending?: (action: string) => boolean;
   onSelectAll: () => void;
   onCleanPatterns: () => void;
   onRemoveDuplicates: () => void;
@@ -225,6 +240,7 @@ function ActionBar({
   setViewMode,
   selectedImages, 
   imageCount,
+  isActionPending,
   onSelectAll, 
   onCleanPatterns,
   onRemoveDuplicates,
@@ -232,7 +248,9 @@ function ActionBar({
   onAnalyzeAll, 
   onRenameWithAI 
 }: ActionBarProps) {
-  const filters = ['all', 'pending', 'analyzed', 'renamed', 'duplicates'];
+  const filters = ['all', 'new', 'pending', 'analyzed', 'renamed', 'duplicates'];
+  const analyzeBusy = isActionPending?.('analyze');
+  const renameBusy = isActionPending?.('rename') || isActionPending?.('clean');
   
   return (
     <div className="action-bar">
@@ -295,15 +313,15 @@ function ActionBar({
         <button 
           className="btn-secondary" 
           onClick={onAnalyzeSelected} 
-          disabled={selectedImages.size === 0}
+          disabled={selectedImages.size === 0 || analyzeBusy}
         >
-          🔍 Analyze Selected
+          {analyzeBusy ? <span className="spinner" /> : '🔍 Analyze Selected'}
         </button>
-        <button className="btn-primary" onClick={onAnalyzeAll}>
-          🤖 AI Analyze All
+        <button className="btn-primary" onClick={onAnalyzeAll} disabled={analyzeBusy}>
+          {analyzeBusy ? <span className="spinner" /> : '🤖 AI Analyze All'}
         </button>
-        <button className="btn-primary" onClick={onRenameWithAI}>
-          ✨ Apply AI Names
+        <button className="btn-primary" onClick={onRenameWithAI} disabled={renameBusy}>
+          {renameBusy ? <span className="spinner" /> : '✨ Apply AI Names'}
         </button>
       </div>
     </div>

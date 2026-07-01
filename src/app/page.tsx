@@ -1,20 +1,27 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { AnimatePresence } from 'framer-motion';
 import { Header } from '@/components/Header';
 import { Notification } from '@/components/Notification';
-import { ProcessingOverlay } from '@/components/ProcessingOverlay';
 import { ProjectsView } from '@/components/ProjectsView';
 import { ProjectView } from '@/components/ProjectView';
 import { ImagePreview } from '@/components/ImagePreview';
 import { CreateProjectModal } from '@/components/CreateProjectModal';
 import { JobViewer } from '@/components/JobViewer';
+import { RunningJobsBar } from '@/components/RunningJobsBar';
 import { useNotification } from '@/hooks/useNotification';
 import { useProjects } from '@/hooks/useProjects';
 import { useImages } from '@/hooks/useImages';
-import { useJobs } from '@/hooks/useJobs';
+import { useJobs, Job, formatJobType } from '@/hooks/useJobs';
 import * as api from '@/lib/api';
+
+const ACTION_BY_JOB_TYPE: Record<string, string> = {
+  scan: 'scan',
+  analyze: 'analyze',
+  rename: 'rename',
+  cleanup: 'duplicates'
+};
 
 export default function Home() {
   const [view, setView] = useState('projects');
@@ -37,13 +44,16 @@ export default function Home() {
     refreshProject 
   } = useProjects(showNotification);
 
+  const fetchJobsRef = useRef<() => void>(() => {});
+
   const {
     images,
     selectedImages,
     loading: imagesLoading,
-    processing,
+    isActionPending,
     loadImages,
     scanFolder,
+    rescanFolder,
     analyzeImages,
     renameWithAI,
     cleanPatterns,
@@ -52,13 +62,38 @@ export default function Home() {
     removeImage,
     toggleSelect,
     selectAll,
-    resetImages
-  } = useImages(showNotification, refreshProject);
+    resetImages,
+    clearPendingAction
+  } = useImages(showNotification, refreshProject, () => fetchJobsRef.current());
 
-  // Jobs hook - fetch all jobs, not just for current project
+  const handleJobComplete = useCallback(async (job: Job) => {
+    const action = ACTION_BY_JOB_TYPE[job.type];
+    if (action) {
+      clearPendingAction(action);
+    }
+    if (job.type === 'rename' && job.config?.usePatternClean) {
+      clearPendingAction('clean');
+    }
+
+    if (currentProject?.id === job.projectId) {
+      await loadImages(job.projectId);
+      await refreshProject();
+    }
+
+    const typeLabel = formatJobType(job.type);
+    if (job.status === 'completed') {
+      showNotification(`${typeLabel} finished: ${job.statusMessage}`);
+    } else if (job.status === 'failed') {
+      showNotification(`${typeLabel} failed: ${job.statusMessage}`, 'error');
+    } else if (job.status === 'cancelled') {
+      showNotification(`${typeLabel} cancelled`, 'warning');
+    }
+  }, [currentProject?.id, showNotification, refreshProject, loadImages, clearPendingAction]);
+
   const {
     jobs,
-    recentJobs,
+    runningJobs,
+    projectRunningJobs,
     selectedJob,
     isOpen: jobViewerOpen,
     openJobViewer,
@@ -67,7 +102,9 @@ export default function Home() {
     removeJob,
     setSelectedJob,
     fetchJobs
-  } = useJobs(); // Fetch all jobs, not filtered by project
+  } = useJobs(undefined, { onJobComplete: handleJobComplete });
+
+  fetchJobsRef.current = fetchJobs;
 
   // Initialize app
   useEffect(() => {
@@ -84,19 +121,14 @@ export default function Home() {
     init();
   }, [loadProjects, fetchJobs]);
 
-  // Refresh jobs after actions
-  useEffect(() => {
-    if (!processing.active && processing.action) {
-      // Refresh jobs when processing completes
-      fetchJobs();
-    }
-  }, [processing.active, processing.action, fetchJobs]);
-
   // Filter images based on current filter and search query
   const filteredImages = useMemo(() => {
     let base = images;
 
     switch (filter) {
+      case 'new':
+        base = base.filter(img => !!img.isNew);
+        break;
       case 'duplicates':
         base = base.filter(img => img.isDuplicate);
         break;
@@ -135,16 +167,17 @@ export default function Home() {
     });
   }, [images, filter, search]);
 
-  // Calculate stats
   const stats = useMemo(() => ({
     total: images.length,
+    new: images.filter(img => !!img.isNew).length,
     analyzed: images.filter(img => img.suggestedName).length,
     renamed: images.filter(img => img.renamed).length,
     duplicates: images.filter(img => img.isDuplicate).length,
     pending: images.filter(img => !img.suggestedName && !img.renamed).length
   }), [images]);
 
-  // Handlers
+  const isBusy = projectRunningJobs.length > 0 || isActionPending('scan') || isActionPending('rescan');
+
   const handleCreateProject = async (name: string, folderPath: string, description: string) => {
     const project = await createProjectFn(name, folderPath, description);
     if (project) {
@@ -175,14 +208,18 @@ export default function Home() {
   const handleScanProject = async () => {
     if (currentProject) {
       await scanFolder(currentProject.id);
-      fetchJobs();
+    }
+  };
+
+  const handleRescanProject = async () => {
+    if (currentProject) {
+      await rescanFolder(currentProject.id);
     }
   };
 
   const handleAnalyzeSelected = async () => {
     if (currentProject) {
       await analyzeImages(currentProject.id, Array.from(selectedImages));
-      fetchJobs();
     }
   };
 
@@ -197,28 +234,24 @@ export default function Home() {
         return;
       }
       await analyzeImages(currentProject.id, pendingIds);
-      fetchJobs();
     }
   };
 
   const handleRenameWithAI = async () => {
     if (currentProject && confirm(`Rename images using AI suggestions?`)) {
       await renameWithAI(currentProject.id);
-      fetchJobs();
     }
   };
 
   const handleCleanPatterns = async () => {
     if (currentProject && confirm(`Clean prefixes from filenames?`)) {
       await cleanPatterns(currentProject.id);
-      fetchJobs();
     }
   };
 
   const handleRemoveDuplicates = async () => {
     if (currentProject && confirm(`Remove duplicate images (keep one copy of each)? This will also delete duplicates from disk and cloud storage.`)) {
       await removeDuplicates(currentProject.id);
-      fetchJobs();
     }
   };
 
@@ -238,14 +271,14 @@ export default function Home() {
     selectAll(filteredImages);
   };
 
+  const handleOpenJob = (job?: Job) => {
+    openJobViewer(job);
+  };
+
   return (
     <div className="app">
       <AnimatePresence>
         {notification && <Notification notification={notification} />}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {processing.active && <ProcessingOverlay processing={processing} />}
       </AnimatePresence>
 
       <Header 
@@ -254,7 +287,8 @@ export default function Home() {
         currentProject={currentProject}
         onBackToProjects={handleBackToProjects}
         jobs={jobs}
-        onOpenJobs={openJobViewer}
+        runningJobs={runningJobs}
+        onOpenJobs={() => handleOpenJob()}
       />
 
       <main className="main">
@@ -266,28 +300,38 @@ export default function Home() {
             onCreateProject={() => setShowCreateProject(true)}
           />
         ) : (
-          <ProjectView
-            project={currentProject}
-            images={filteredImages}
-            stats={stats}
-            filter={filter}
-            setFilter={setFilter}
-            search={search}
-            setSearch={setSearch}
-            selectedImages={selectedImages}
-            loading={imagesLoading}
-            onScan={handleScanProject}
-            onAnalyzeSelected={handleAnalyzeSelected}
-            onAnalyzeAll={handleAnalyzeAll}
-            onRenameWithAI={handleRenameWithAI}
-            onCleanPatterns={handleCleanPatterns}
-            onRemoveDuplicates={handleRemoveDuplicates}
-            onToggleSelect={toggleSelect}
-            onSelectAll={handleSelectAll}
-            onPreview={setPreviewImage}
-            onRename={handleRenameSingle}
-            onDelete={handleDeleteImage}
-          />
+          <>
+            <RunningJobsBar
+              jobs={projectRunningJobs}
+              onViewJobs={() => handleOpenJob()}
+              onSelectJob={handleOpenJob}
+            />
+            <ProjectView
+              project={currentProject}
+              images={filteredImages}
+              stats={stats}
+              filter={filter}
+              setFilter={setFilter}
+              search={search}
+              setSearch={setSearch}
+              selectedImages={selectedImages}
+              loading={imagesLoading}
+              isBusy={isBusy}
+              isActionPending={isActionPending}
+              onScan={handleScanProject}
+              onRescan={handleRescanProject}
+              onAnalyzeSelected={handleAnalyzeSelected}
+              onAnalyzeAll={handleAnalyzeAll}
+              onRenameWithAI={handleRenameWithAI}
+              onCleanPatterns={handleCleanPatterns}
+              onRemoveDuplicates={handleRemoveDuplicates}
+              onToggleSelect={toggleSelect}
+              onSelectAll={handleSelectAll}
+              onPreview={setPreviewImage}
+              onRename={handleRenameSingle}
+              onDelete={handleDeleteImage}
+            />
+          </>
         )}
       </main>
 
@@ -318,7 +362,6 @@ export default function Home() {
         )}
       </AnimatePresence>
 
-      {/* Job Viewer Modal */}
       <JobViewer
         jobs={jobs}
         selectedJob={selectedJob}

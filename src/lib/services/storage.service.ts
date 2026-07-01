@@ -117,8 +117,17 @@ export async function uploadImage(
     
     return { success: true, url, storagePath, skipped: false };
   } catch (error: any) {
-    console.error(`❌ Upload failed for ${filename}:`, error.message);
-    return { success: false, error: error.message };
+    const message = error?.message || 'Unknown upload error';
+    console.error(`❌ Upload failed for ${filename}:`, message);
+    if (typeof message === 'string' && message.toLowerCase().includes('billing account')) {
+      return {
+        success: false,
+        error:
+          `${message}. ` +
+          `Fix: enable billing for the underlying Google Cloud project, or set DISABLE_CLOUD_STORAGE=true in .env.local to skip cloud uploads.`
+      };
+    }
+    return { success: false, error: message };
   }
 }
 

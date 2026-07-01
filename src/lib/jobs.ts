@@ -127,6 +127,30 @@ export async function startJob(jobId: string): Promise<Job | null> {
   return job;
 }
 
+// Update total items (e.g. after scan discovers file count)
+export async function setJobTotalItems(jobId: string, totalItems: number): Promise<Job | null> {
+  const job = inMemoryJobs.get(jobId);
+  if (!job) return null;
+
+  job.totalItems = totalItems;
+  job.statusMessage = `Processing ${totalItems} items...`;
+
+  const db = getDb();
+  if (db) {
+    try {
+      const data = prepareForFirestore({
+        totalItems: job.totalItems,
+        statusMessage: job.statusMessage
+      });
+      await db.collection('jobs').doc(job.id).update(data);
+    } catch (e: any) {
+      console.error('❌ Failed to update job totalItems in Firestore:', e.message);
+    }
+  }
+
+  return job;
+}
+
 // Update job progress
 export async function updateJobProgress(jobId: string, update: {
   processedItems?: number;
@@ -296,6 +320,22 @@ export async function getAllJobs(): Promise<Job[]> {
   return Array.from(inMemoryJobs.values()).sort((a, b) =>
     new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
   );
+}
+
+// Check if a job was cancelled (reads in-memory first for speed during workers)
+export function isJobCancelled(jobId: string): boolean {
+  const job = inMemoryJobs.get(jobId);
+  return job?.status === 'cancelled';
+}
+
+export async function isJobCancelledAsync(jobId: string): Promise<boolean> {
+  if (isJobCancelled(jobId)) return true;
+  const job = await getJob(jobId);
+  return job?.status === 'cancelled';
+}
+
+export function shouldStopJob(jobId: string): boolean {
+  return isJobCancelled(jobId);
 }
 
 // Get a single job
