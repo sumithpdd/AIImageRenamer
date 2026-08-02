@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ImageCard } from './ImageCard';
+import { TagFilterBar, ProjectTagCount } from './TagFilterBar';
 import { getImageUrl } from '@/lib/api';
 
 interface ProjectViewProps {
@@ -13,6 +14,11 @@ interface ProjectViewProps {
   setFilter: (filter: string) => void;
   search: string;
   setSearch: (value: string) => void;
+  selectedTags: string[];
+  projectTags: ProjectTagCount[];
+  onToggleTagFilter: (tag: string) => void;
+  onClearTagFilters: () => void;
+  onBatchAddTag: (tag: string) => void;
   selectedImages: Set<string>;
   loading: boolean;
   isBusy?: boolean;
@@ -23,7 +29,7 @@ interface ProjectViewProps {
   onAnalyzeAll: () => void;
   onRenameWithAI: () => void;
   onCleanPatterns: () => void;
-   onRemoveDuplicates: () => void;
+  onRemoveDuplicates: () => void;
   onToggleSelect: (imageId: string) => void;
   onSelectAll: () => void;
   onPreview: (image: any) => void;
@@ -39,6 +45,11 @@ export function ProjectView({
   setFilter,
   search,
   setSearch,
+  selectedTags,
+  projectTags,
+  onToggleTagFilter,
+  onClearTagFilters,
+  onBatchAddTag,
   selectedImages, 
   loading,
   isBusy = false,
@@ -57,6 +68,7 @@ export function ProjectView({
   onDelete 
 }: ProjectViewProps) {
   const [viewMode, setViewMode] = useState<'grid' | 'table'>('grid');
+  const hasAnyImages = stats.total > 0 || images.length > 0;
 
   return (
     <motion.div
@@ -73,7 +85,7 @@ export function ProjectView({
           onRescan={onRescan}
         />
 
-        {images.length > 0 && (
+        {hasAnyImages && (
           <>
             <StatsBar stats={stats} />
             <ActionBar
@@ -93,11 +105,23 @@ export function ProjectView({
               onAnalyzeAll={onAnalyzeAll}
               onRenameWithAI={onRenameWithAI}
             />
+            <TagFilterBar
+              tags={projectTags}
+              selectedTags={selectedTags}
+              onToggleTag={onToggleTagFilter}
+              onClear={onClearTagFilters}
+              selectedImageCount={selectedImages.size}
+              onBatchAddTag={onBatchAddTag}
+            />
           </>
         )}
       </div>
 
-      {images.length === 0 && !loading && <EmptyImages />}
+      {images.length === 0 && !loading && (
+        stats.total > 0
+          ? <EmptyFiltered onClearTags={onClearTagFilters} hasTagFilters={selectedTags.length > 0} />
+          : <EmptyImages />
+      )}
 
       {viewMode === 'grid' ? (
         <div className="image-grid">
@@ -112,6 +136,7 @@ export function ProjectView({
                 onPreview={() => onPreview(image)}
                 onRename={(newName) => onRename(image, newName)}
                 onDelete={() => onDelete(image)}
+                onTagClick={onToggleTagFilter}
               />
             ))}
           </AnimatePresence>
@@ -146,7 +171,21 @@ export function ProjectView({
                     {image.metadata?.description || image.aiDescription || ''}
                   </td>
                   <td>
-                    {(image.metadata?.tags || []).join(', ')}
+                    <div className="table-tags">
+                      {(image.metadata?.tags || []).map((tag: string) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="tag card-tag"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleTagFilter(tag);
+                          }}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
                   </td>
                   <td>{image.status}</td>
                   <td>{image.renamed ? 'Yes' : 'No'}</td>
@@ -169,6 +208,7 @@ function ControlRow({ projectId, folderPath, loading, isBusy, onScan, onRescan }
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
         </svg>
         <span className="mono">{folderPath}</span>
+        <span className="folder-hint">recursive</span>
       </div>
       <div style={{ display: 'flex', gap: '8px' }}>
         <button className="btn-secondary" onClick={onScan} disabled={scanDisabled}>
@@ -324,6 +364,31 @@ function ActionBar({
           {renameBusy ? <span className="spinner" /> : '✨ Apply AI Names'}
         </button>
       </div>
+    </div>
+  );
+}
+
+function EmptyFiltered({
+  onClearTags,
+  hasTagFilters
+}: {
+  onClearTags: () => void;
+  hasTagFilters: boolean;
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <path d="M4 4h16v2.5L14 14v6l-4 2v-8L4 6.5V4z" />
+        </svg>
+      </div>
+      <h3>No images match</h3>
+      <p>Try adjusting search or tag filters</p>
+      {hasTagFilters && (
+        <button type="button" className="btn-secondary" onClick={onClearTags}>
+          Clear tag filters
+        </button>
+      )}
     </div>
   );
 }

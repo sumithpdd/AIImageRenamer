@@ -9,6 +9,10 @@ export function useProjects(showNotification: (msg: string, type?: string) => vo
   const loadProjects = useCallback(async () => {
     try {
       const data = await api.fetchProjects();
+      if (data.error && !data.projects) {
+        showNotification(data.error, 'error');
+        return;
+      }
       setProjects(data.projects || []);
     } catch (err) {
       showNotification('Failed to load projects', 'error');

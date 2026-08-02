@@ -3,15 +3,29 @@
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { getImageUrl } from '@/lib/api';
+import { TagEditor } from './TagEditor';
 
 interface ImagePreviewProps {
   image: any;
+  tagSuggestions?: string[];
   onClose: () => void;
   onRename: (newName: string) => void;
   onDelete: () => void;
+  onAddTag?: (tag: string) => void | Promise<void>;
+  onRemoveTag?: (tag: string) => void | Promise<void>;
+  onFilterTag?: (tag: string) => void;
 }
 
-export function ImagePreview({ image, onClose, onRename, onDelete }: ImagePreviewProps) {
+export function ImagePreview({
+  image,
+  tagSuggestions = [],
+  onClose,
+  onRename,
+  onDelete,
+  onAddTag,
+  onRemoveTag,
+  onFilterTag
+}: ImagePreviewProps) {
   const [newName, setNewName] = useState(image.suggestedName || '');
   const [activeTab, setActiveTab] = useState<'overview' | 'analysis' | 'details'>('overview');
 
@@ -22,6 +36,7 @@ export function ImagePreview({ image, onClose, onRename, onDelete }: ImagePrevie
   };
 
   const metadata = image.metadata || {};
+  const tags = metadata.tags || [];
 
   return (
     <motion.div 
@@ -77,15 +92,28 @@ export function ImagePreview({ image, onClose, onRename, onDelete }: ImagePrevie
               <OverviewTab 
                 image={image}
                 metadata={metadata}
+                tags={tags}
+                tagSuggestions={tagSuggestions}
                 newName={newName}
                 setNewName={setNewName}
                 onRename={handleRename}
                 onDelete={onDelete}
+                onAddTag={onAddTag}
+                onRemoveTag={onRemoveTag}
+                onFilterTag={onFilterTag}
               />
             )}
 
             {activeTab === 'analysis' && (
-              <AnalysisTab image={image} metadata={metadata} />
+              <AnalysisTab
+                image={image}
+                metadata={metadata}
+                tags={tags}
+                tagSuggestions={tagSuggestions}
+                onAddTag={onAddTag}
+                onRemoveTag={onRemoveTag}
+                onFilterTag={onFilterTag}
+              />
             )}
 
             {activeTab === 'details' && (
@@ -98,13 +126,30 @@ export function ImagePreview({ image, onClose, onRename, onDelete }: ImagePrevie
   );
 }
 
-function OverviewTab({ image, metadata, newName, setNewName, onRename, onDelete }: {
+function OverviewTab({
+  image,
+  metadata,
+  tags,
+  tagSuggestions,
+  newName,
+  setNewName,
+  onRename,
+  onDelete,
+  onAddTag,
+  onRemoveTag,
+  onFilterTag
+}: {
   image: any;
   metadata: any;
+  tags: string[];
+  tagSuggestions: string[];
   newName: string;
   setNewName: (name: string) => void;
   onRename: () => void;
   onDelete: () => void;
+  onAddTag?: (tag: string) => void | Promise<void>;
+  onRemoveTag?: (tag: string) => void | Promise<void>;
+  onFilterTag?: (tag: string) => void;
 }) {
   return (
     <div className="tab-content">
@@ -126,6 +171,19 @@ function OverviewTab({ image, metadata, newName, setNewName, onRename, onDelete 
         <div className="info-section">
           <label>Title</label>
           <p>{metadata.title}</p>
+        </div>
+      )}
+
+      {onAddTag && onRemoveTag && (
+        <div className="info-section">
+          <label>Tags</label>
+          <TagEditor
+            tags={tags}
+            suggestions={tagSuggestions}
+            onAdd={onAddTag}
+            onRemove={onRemoveTag}
+            onTagClick={onFilterTag}
+          />
         </div>
       )}
 
@@ -199,10 +257,26 @@ function OverviewTab({ image, metadata, newName, setNewName, onRename, onDelete 
   );
 }
 
-function AnalysisTab({ image, metadata }: { image: any; metadata: any }) {
-  const hasAnalysis = image.status === 'analyzed' || metadata.tags?.length > 0;
+function AnalysisTab({
+  image,
+  metadata,
+  tags,
+  tagSuggestions,
+  onAddTag,
+  onRemoveTag,
+  onFilterTag
+}: {
+  image: any;
+  metadata: any;
+  tags: string[];
+  tagSuggestions: string[];
+  onAddTag?: (tag: string) => void | Promise<void>;
+  onRemoveTag?: (tag: string) => void | Promise<void>;
+  onFilterTag?: (tag: string) => void;
+}) {
+  const hasAnalysis = image.status === 'analyzed' || tags.length > 0 || !!metadata.description;
 
-  if (!hasAnalysis) {
+  if (!hasAnalysis && !onAddTag) {
     return (
       <div className="tab-content">
         <div className="empty-analysis">
@@ -230,17 +304,25 @@ function AnalysisTab({ image, metadata }: { image: any; metadata: any }) {
         </div>
       )}
 
-      {/* Tags */}
-      {metadata.tags && metadata.tags.length > 0 && (
-        <div className="info-section">
-          <label>Tags</label>
+      {/* Tags (editable) */}
+      <div className="info-section">
+        <label>Tags</label>
+        {onAddTag && onRemoveTag ? (
+          <TagEditor
+            tags={tags}
+            suggestions={tagSuggestions}
+            onAdd={onAddTag}
+            onRemove={onRemoveTag}
+            onTagClick={onFilterTag}
+          />
+        ) : (
           <div className="tag-list">
-            {metadata.tags.map((tag: string, i: number) => (
-              <span key={i} className="tag">{tag}</span>
+            {tags.map((tag: string) => (
+              <span key={tag} className="tag">{tag}</span>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Colors */}
       {metadata.colors && metadata.colors.length > 0 && (
@@ -294,6 +376,18 @@ function AnalysisTab({ image, metadata }: { image: any; metadata: any }) {
               <span className="info-value">{metadata.mood}</span>
             </div>
           )}
+          {metadata.scene && (
+            <div className="info-item">
+              <span className="info-label">Scene</span>
+              <span className="info-value">{metadata.scene}</span>
+            </div>
+          )}
+          {typeof metadata.textVisible === 'boolean' && (
+            <div className="info-item">
+              <span className="info-label">Text Visible</span>
+              <span className="info-value">{metadata.textVisible ? 'Yes' : 'No'}</span>
+            </div>
+          )}
         </div>
       </div>
 
@@ -329,6 +423,18 @@ function DetailsTab({ image, metadata }: { image: any; metadata: any }) {
       <div className="info-section">
         <label>File Properties</label>
         <div className="properties-list">
+          {image.relativePath && (
+            <div className="property">
+              <span className="prop-key">relativePath</span>
+              <span className="prop-value mono">{image.relativePath}</span>
+            </div>
+          )}
+          {(image.relativeDir || metadata.sourceFolder) && (
+            <div className="property">
+              <span className="prop-key">folder</span>
+              <span className="prop-value mono">{image.relativeDir || metadata.sourceFolder}</span>
+            </div>
+          )}
           <div className="property">
             <span className="prop-key">extension</span>
             <span className="prop-value">{image.extension}</span>

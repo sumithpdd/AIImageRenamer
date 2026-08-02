@@ -3,10 +3,11 @@ import path from 'path';
 import crypto from 'crypto';
 import { isStorageConfigured } from '@/lib/firebase';
 import { ImageData, generateImageId } from '@/lib/storage';
-import { SUPPORTED_EXTENSIONS, generateCleanName } from '@/lib/helpers';
+import { generateCleanName } from '@/lib/helpers';
 import { updateJobProgress, completeJob, shouldStopJob, setJobTotalItems } from '@/lib/jobs';
 import { getImageDimensions, calculateImageMetadata } from '@/lib/utils/image.utils';
 import { BATCH_CONCURRENCY, processConcurrently } from '@/lib/utils/batch.utils';
+import { collectMediaFilesRecursive, MediaFileEntry } from '@/lib/utils/fs.utils';
 import { updateProject } from '@/lib/services/project.service';
 import { saveImages, clearProjectImages, getProjectImages } from '@/lib/services/image.service';
 import { uploadImage } from '@/lib/services/storage.service';
@@ -29,28 +30,43 @@ export interface ScanWorkerResult {
   skippedCount?: number;
   images: Array<ImageData & { id: string }>;
   newCount: number;
+  folderCount?: number;
 }
 
 type ScanFileResult =
   | { ok: true; file: string; imageData: Omit<ImageData, 'id'>; uploaded: boolean; skipped: boolean }
   | { ok: false; file: string; error: string; skippedExisting?: boolean };
 
+/** Storage object key that preserves nested folders under the project */
+function storageObjectName(entry: MediaFileEntry): string {
+  return entry.relativePath.split(path.sep).join('/');
+}
+
 export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorkerResult> {
   const { projectId, projectName, folderPath, scanMode, jobId } = params;
   const isRescanOnly = scanMode === 'rescan';
   const useCloudStorage = isStorageConfigured();
 
-  const files = (await fs.readdir(folderPath)).filter(f => {
-    const ext = path.extname(f).toLowerCase();
-    return SUPPORTED_EXTENSIONS.includes(ext);
+  await updateJobProgress(jobId, {
+    processedItems: 0,
+    statusMessage: 'Walking folder tree recursively…'
   });
+
+  const mediaFiles = await collectMediaFilesRecursive(folderPath);
+  const folderCount = new Set(
+    mediaFiles.map(f => f.relativeDir).filter(Boolean)
+  ).size;
+
+  console.log(
+    `📂 Scan ${scanMode}: found ${mediaFiles.length} media file(s) under ${folderPath}`
+  );
 
   await updateJobProgress(jobId, {
     processedItems: 0,
-    statusMessage: `Found ${files.length} files, scanning with ${BATCH_CONCURRENCY.scan} parallel workers`
+    statusMessage: `Found ${mediaFiles.length} images across ${folderCount || 1} folder(s); scanning with ${BATCH_CONCURRENCY.scan} parallel workers`
   });
 
-  await setJobTotalItems(jobId, files.length);
+  await setJobTotalItems(jobId, mediaFiles.length);
 
   const existingResult = await getProjectImages(projectId);
   const existingImages = existingResult.success && existingResult.images ? existingResult.images : [];
@@ -70,15 +86,20 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
   const counts = { success: 0, error: 0, uploaded: 0 };
 
   const fileResults = await processConcurrently(
-    files,
+    mediaFiles,
     BATCH_CONCURRENCY.scan,
-    async (file): Promise<ScanFileResult> => {
+    async (entry): Promise<ScanFileResult> => {
       if (shouldStopJob(jobId)) {
-        return { ok: false, file, error: 'Cancelled' };
+        return { ok: false, file: entry.relativePath, error: 'Cancelled' };
       }
 
-      const ext = path.extname(file).toLowerCase();
-      const filePath = path.join(folderPath, file);
+      const ext = path.extname(entry.fileName).toLowerCase();
+      const filePath = entry.absolutePath;
+      const displayName = entry.relativePath;
+
+      await updateJobProgress(jobId, {
+        currentTarget: { name: displayName, status: 'running' }
+      });
 
       try {
         const stats = await fs.stat(filePath);
@@ -89,11 +110,12 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
           const existingList = existingByHash.get(hash) || [];
           const alreadyTracked = existingList.some(img =>
             img?.path === filePath ||
-            img?.currentName === file ||
-            img?.originalName === file
+            img?.relativePath === entry.relativePath ||
+            img?.currentName === entry.fileName ||
+            img?.originalName === entry.fileName
           );
           if (alreadyTracked) {
-            return { ok: false, file, error: 'Already tracked', skippedExisting: true };
+            return { ok: false, file: displayName, error: 'Already tracked', skippedExisting: true };
           }
         }
 
@@ -105,7 +127,12 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
         let wasSkipped = false;
 
         if (useCloudStorage) {
-          const uploadResult = await uploadImage(filePath, projectName, file, true);
+          const uploadResult = await uploadImage(
+            filePath,
+            projectName,
+            storageObjectName(entry),
+            true
+          );
           if (uploadResult.success) {
             storageUrl = uploadResult.url;
             storagePath = uploadResult.storagePath;
@@ -123,7 +150,8 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
           filesizeMB: fileMetadata.filesizeMB || 0,
           tags: [],
           colors: [],
-          objects: []
+          objects: [],
+          sourceFolder: entry.relativeDir || null
         };
 
         if (fileMetadata.resolution) metadata.resolution = fileMetadata.resolution;
@@ -131,9 +159,11 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
 
         let imageData: Omit<ImageData, 'id'> = {
           projectId,
-          originalName: file,
-          currentName: file,
+          originalName: entry.fileName,
+          currentName: entry.fileName,
           path: filePath,
+          relativePath: entry.relativePath,
+          relativeDir: entry.relativeDir,
           size: stats.size,
           hash,
           extension: ext,
@@ -145,7 +175,7 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
           status: 'scanned',
           aiDescription: null,
           suggestedName: null,
-          patternCleanName: generateCleanName(file, null),
+          patternCleanName: generateCleanName(entry.fileName, null),
           isDuplicate: false,
           duplicateOf: null,
           renamed: false,
@@ -159,7 +189,8 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
           if (existingList.length > 0) {
             const existing =
               existingList.find(img => img.path === filePath) ||
-              existingList.find(img => img.currentName === file || img.originalName === file) ||
+              existingList.find(img => img.relativePath === entry.relativePath) ||
+              existingList.find(img => img.currentName === entry.fileName || img.originalName === entry.fileName) ||
               existingList[0];
 
             if (existing) {
@@ -189,13 +220,13 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
 
         return {
           ok: true,
-          file,
+          file: displayName,
           imageData,
           uploaded: !!storageUrl && !wasSkipped,
           skipped: wasSkipped
         };
       } catch (err: any) {
-        return { ok: false, file, error: err.message };
+        return { ok: false, file: displayName, error: err.message };
       }
     },
     {
@@ -205,7 +236,7 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
           processedItems: completed,
           successCount: counts.success,
           errorCount: counts.error,
-          statusMessage: `Scanning files ${completed}/${total} (${BATCH_CONCURRENCY.scan} parallel)`
+          statusMessage: `Scanning ${completed}/${total} (${BATCH_CONCURRENCY.scan} parallel, deep walk)`
         });
       }
     }
@@ -221,10 +252,11 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
       if (result.uploaded) counts.uploaded++;
 
       const hash = result.imageData.hash;
+      const label = result.imageData.relativePath || result.file;
       if (duplicateHashes.has(hash)) {
-        duplicateHashes.get(hash)!.push(result.file);
+        duplicateHashes.get(hash)!.push(label);
       } else {
-        duplicateHashes.set(hash, [result.file]);
+        duplicateHashes.set(hash, [label]);
       }
 
       if (isRescanOnly) {
@@ -266,9 +298,10 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
     if (fileNames.length > 1) {
       duplicateCount += fileNames.length;
       outputImages.forEach(img => {
+        const label = img.relativePath || img.originalName;
         if (img.hash === hash) {
           img.isDuplicate = true;
-          img.duplicateOf = fileNames.filter(f => f !== img.originalName);
+          img.duplicateOf = fileNames.filter(f => f !== label);
         }
       });
     }
@@ -280,7 +313,7 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
       if (existingList.length > 0) {
         img.isDuplicate = true;
         const existingNames = existingList
-          .map(e => e.currentName || e.originalName)
+          .map(e => e.relativePath || e.currentName || e.originalName)
           .filter(Boolean);
         img.duplicateOf = Array.from(new Set([...(img.duplicateOf || []), ...existingNames]));
       }
@@ -314,14 +347,14 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
   const statusMessage = shouldStopJob(jobId)
     ? `Scan cancelled after ${counts.success} files`
     : useCloudStorage
-      ? `${isRescanOnly ? 'Rescanned' : 'Scanned'} ${outputImages.length} images, ${counts.uploaded} uploaded (${skippedCount} skipped), ${duplicateCount} duplicates`
-      : `${isRescanOnly ? 'Rescanned' : 'Scanned'} ${outputImages.length} images, ${duplicateCount} duplicates`;
+      ? `${isRescanOnly ? 'Rescanned' : 'Scanned'} ${outputImages.length} images in ${folderCount || 1} folder(s), ${counts.uploaded} uploaded (${skippedCount} skipped), ${duplicateCount} duplicates`
+      : `${isRescanOnly ? 'Rescanned' : 'Scanned'} ${outputImages.length} images in ${folderCount || 1} folder(s), ${duplicateCount} duplicates`;
 
   await completeJob(jobId, { status, statusMessage });
 
   const imagesWithIds = outputImages.map(img => ({
     ...img,
-    id: generateImageId(img.hash, img.originalName)
+    id: generateImageId(img.hash, img.originalName, img.relativePath)
   }));
 
   return {
@@ -333,6 +366,7 @@ export async function runScanWorker(params: ScanWorkerParams): Promise<ScanWorke
     uploadedCount: useCloudStorage ? counts.uploaded : undefined,
     skippedCount: useCloudStorage ? skippedCount : undefined,
     images: imagesWithIds,
-    newCount: isRescanOnly ? newImages.length : outputImages.filter(i => (i as any).isNew).length
+    newCount: isRescanOnly ? newImages.length : outputImages.filter(i => (i as any).isNew).length,
+    folderCount
   };
 }

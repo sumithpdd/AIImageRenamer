@@ -12,6 +12,7 @@ interface ImageCardProps {
   onPreview: () => void;
   onRename: (newName: string) => void;
   onDelete: () => void;
+  onTagClick?: (tag: string) => void;
 }
 
 export function ImageCard({ 
@@ -21,7 +22,8 @@ export function ImageCard({
   onToggleSelect, 
   onPreview, 
   onRename, 
-  onDelete 
+  onDelete,
+  onTagClick
 }: ImageCardProps) {
   const [editMode, setEditMode] = useState(false);
   const [newName, setNewName] = useState('');
@@ -70,7 +72,8 @@ export function ImageCard({
         ) : (
           <ImageInfo 
             image={image} 
-            onApplySuggestion={applySuggestion} 
+            onApplySuggestion={applySuggestion}
+            onTagClick={onTagClick}
           />
         )}
 
@@ -161,15 +164,59 @@ function EditNameForm({
   );
 }
 
-function ImageInfo({ image, onApplySuggestion }: { image: any; onApplySuggestion: () => void }) {
+function ImageInfo({
+  image,
+  onApplySuggestion,
+  onTagClick
+}: {
+  image: any;
+  onApplySuggestion: () => void;
+  onTagClick?: (tag: string) => void;
+}) {
+  const tags = (image.metadata?.tags || []).slice(0, 3);
+  const extra = (image.metadata?.tags?.length || 0) - tags.length;
+
   return (
     <>
+      {image.relativeDir ? (
+        <p className="image-folder mono" title={image.relativeDir}>
+          {image.relativeDir}
+        </p>
+      ) : null}
+
       <p className="image-name mono" title={image.currentName}>
         {image.currentName}
       </p>
       
       {image.originalName !== image.currentName && (
         <p className="original-name mono">was: {image.originalName}</p>
+      )}
+
+      {image.metadata?.category && (
+        <p className="image-category">
+          {image.metadata.category}
+          {image.metadata.subcategory ? ` · ${image.metadata.subcategory}` : ''}
+        </p>
+      )}
+
+      {tags.length > 0 && (
+        <div className="card-tags">
+          {tags.map((tag: string) => (
+            <button
+              key={tag}
+              type="button"
+              className="tag card-tag"
+              title={`Filter by ${tag}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                onTagClick?.(tag);
+              }}
+            >
+              {tag}
+            </button>
+          ))}
+          {extra > 0 && <span className="tag-more">+{extra}</span>}
+        </div>
       )}
       
       {image.suggestedName && !image.renamed && (

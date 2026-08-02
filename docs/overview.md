@@ -4,14 +4,14 @@ AI Image Renamer is a Next.js 14 application that uses **Google Gemini** to anal
 
 ### Features
 
-- 🗂️ **Project-Based Organization** – Create projects for different image folders.
-- 🤖 **AI-Powered Analysis** – Gemini extracts tags, colors, objects, style, mood, and descriptions.
+- 🗂️ **Project-Based Organization** – Create projects for different image folders (scans recursively into nested subfolders).
+- 🤖 **AI-Powered Analysis** – Gemini extracts tags, colors, objects, category, style, mood, scene, and descriptions.
 - ☁️ **Firebase Storage** – Images uploaded to cloud storage, organized by project.
 - 🔍 **Duplicate Detection** – MD5 hashing highlights duplicate files.
 - 🧹 **Smart Pattern Cleaning** – Strips prefixes like `imgi_65_`, `IMG_`, `DSC_`.
 - ✏️ **Batch Rename** – Apply AI suggestions to many files at once.
 - 🖼️ **Rich Image Preview** – Tabbed UI with overview, AI analysis, and metadata.
-- 📋 **Job System** – Scan, analyze, rename, and cleanup tracked as jobs with progress.
+- 📋 **Job System** – Scan, analyze, rename, and cleanup run in parallel with a live running-tasks bar.
 
 ### Why Next.js (vs. Separate React + Express)
 

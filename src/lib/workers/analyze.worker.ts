@@ -17,10 +17,12 @@ const ANALYSIS_PROMPT = `Analyze this image comprehensively and return a JSON ob
   "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"],
   "colors": ["primary_color", "secondary_color", "accent_color"],
   "objects": ["main_object", "object2", "object3"],
-  "category": "one of: photo, illustration, graphic, screenshot, document, artwork",
-  "subcategory": "more specific category like: landscape, portrait, product, interior, food, etc",
+  "category": "one of: photo, illustration, graphic, screenshot, website-screenshot, logo, icon, banner, product, stock, document, artwork, ai-generated, design, social",
+  "subcategory": "more specific category like: landscape, portrait, product, interior, food, ui, marketing, event, personal, etc",
   "style": "style description like: modern, vintage, minimalist, colorful, etc",
   "mood": "emotional mood like: peaceful, energetic, professional, cozy, etc",
+  "textVisible": false,
+  "scene": "short scene type e.g. outdoor, desktop-ui, product-shot, people",
   "confidence": 0.95
 }
 
@@ -31,7 +33,14 @@ Rules for suggestedName:
 - No file extension
 - Be descriptive: "modern_living_room_beige_sofa" not "image1"
 
+If a folder context is provided, use it as a soft hint for category/tags but prefer what you see in the image.
+
 Return ONLY valid JSON, no markdown, no explanation.`;
+
+function buildAnalysisPrompt(folderHint?: string | null): string {
+  if (!folderHint) return ANALYSIS_PROMPT;
+  return `${ANALYSIS_PROMPT}\n\nFolder context (soft hint): ${folderHint}`;
+}
 
 export interface AnalyzeWorkerParams {
   projectId: string;
@@ -96,7 +105,7 @@ async function analyzeSingleImage(
                 data: base64Image
               }
             },
-            { text: ANALYSIS_PROMPT }
+            { text: buildAnalysisPrompt(imageData.relativeDir || imageData.metadata?.sourceFolder) }
           ]
         });
 
@@ -172,6 +181,9 @@ async function analyzeSingleImage(
       subcategory: analysisResult.subcategory || null,
       style: styleName,
       mood: moodName,
+      textVisible: typeof analysisResult.textVisible === 'boolean' ? analysisResult.textVisible : undefined,
+      scene: analysisResult.scene || null,
+      sourceFolder: imageData.relativeDir || imageData.metadata?.sourceFolder || null,
       tagIds: tagItems.filter(Boolean).map(t => t!.id),
       colorIds: colorItems.filter(Boolean).map(c => c!.id),
       categoryId: categoryItem ? categoryItem.id : undefined,
@@ -222,8 +234,14 @@ export async function runAnalyzeWorker(params: AnalyzeWorkerParams): Promise<Ana
         return { imageId, error: 'Cancelled', success: false };
       }
 
+      const imageLookup = await getImage(projectId, imageId);
+      const targetLabel =
+        imageLookup.success && imageLookup.image
+          ? (imageLookup.image.relativePath || imageLookup.image.currentName || imageId)
+          : imageId;
+
       await updateJobProgress(jobId, {
-        currentTarget: { name: imageId, status: 'running' }
+        currentTarget: { name: targetLabel, status: 'running' }
       });
 
       const result = await analyzeSingleImage(projectId, imageId, genAI);
@@ -233,16 +251,16 @@ export async function runAnalyzeWorker(params: AnalyzeWorkerParams): Promise<Ana
         await updateJobProgress(jobId, {
           successCount: counts.success,
           currentTarget: {
-            name: imageId,
+            name: targetLabel,
             status: 'completed',
-            data: { suggestedName: result.suggestedName, title: result.metadata?.title }
+            data: { suggestedName: result.suggestedName, title: result.metadata?.title, imageId }
           }
         });
       } else if (result.error !== 'Cancelled') {
         counts.error++;
         await updateJobProgress(jobId, {
           errorCount: counts.error,
-          currentTarget: { name: imageId, status: 'failed', error: result.error }
+          currentTarget: { name: targetLabel, status: 'failed', error: result.error }
         });
       }
 

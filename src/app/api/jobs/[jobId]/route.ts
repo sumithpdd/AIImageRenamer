@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getJob, inMemoryJobs } from '@/lib/jobs';
 import { getDb } from '@/lib/firebase';
+import { isFirestoreQuotaCoolingDown, isQuotaError, markFirestoreQuotaExceeded } from '@/lib/utils/firestore-quota';
 
 // GET /api/jobs/[jobId] - Get single job details
 export async function GET(
@@ -49,12 +50,16 @@ export async function DELETE(
       job.statusMessage = 'Job cancelled by user';
 
       const db = getDb();
-      if (db) {
-        await db.collection('jobs').doc(jobId).update({
-          status: job.status,
-          completedAt: job.completedAt,
-          statusMessage: job.statusMessage
-        });
+      if (db && !isFirestoreQuotaCoolingDown()) {
+        try {
+          await db.collection('jobs').doc(jobId).update({
+            status: job.status,
+            completedAt: job.completedAt,
+            statusMessage: job.statusMessage
+          });
+        } catch (e) {
+          if (isQuotaError(e)) markFirestoreQuotaExceeded(e);
+        }
       }
     }
     
@@ -64,8 +69,12 @@ export async function DELETE(
     
     if (removeFromHistory) {
       const db = getDb();
-      if (db) {
-        await db.collection('jobs').doc(jobId).delete();
+      if (db && !isFirestoreQuotaCoolingDown()) {
+        try {
+          await db.collection('jobs').doc(jobId).delete();
+        } catch (e) {
+          if (isQuotaError(e)) markFirestoreQuotaExceeded(e);
+        }
       }
       inMemoryJobs.delete(jobId);
       return NextResponse.json({ success: true, message: 'Job removed from history' });

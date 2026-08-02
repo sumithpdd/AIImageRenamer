@@ -56,10 +56,13 @@ export function CreateProjectModal({ onClose, onCreate, loading }: CreateProject
               type="text"
               value={folderPath}
               onChange={(e) => setFolderPath(e.target.value)}
-              placeholder="C:\Users\Photos"
+              placeholder="C:\CleanupImages"
               required
               className="mono"
             />
+            <p className="form-hint">
+              Scans recursively into all nested subfolders (e.g. Screenshots\2025-08).
+            </p>
           </div>
           
           <div className="form-group">

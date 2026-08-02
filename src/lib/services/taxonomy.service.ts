@@ -1,13 +1,15 @@
 /**
  * Taxonomy Service
- * Central place to manage tags, colors, categories, styles, and moods.
- * 
- * Physically stored in a single `taxonomies` collection with a `type` field,
- * but conceptually this gives you one place per "collection" in the UI.
+ * Central cache for tags, colors, categories, styles, and moods.
  */
 
 import { getDb } from '@/lib/firebase';
 import { prepareForFirestore } from '@/lib/utils/firestore.utils';
+import {
+  isQuotaError,
+  isFirestoreQuotaCoolingDown,
+  markFirestoreQuotaExceeded
+} from '@/lib/utils/firestore-quota';
 
 export type TaxonomyType = 'tag' | 'color' | 'category' | 'style' | 'mood';
 
@@ -20,43 +22,119 @@ export interface TaxonomyItem {
   updatedAt: string;
 }
 
-// In-memory fallback when Firestore is not configured
-const inMemoryTaxonomies = new Map<string, TaxonomyItem>();
+const taxonomyCache = new Map<string, TaxonomyItem>();
+const pendingLookups = new Map<string, Promise<TaxonomyItem | null>>();
+let cacheLoaded = false;
+let cacheLoadPromise: Promise<void> | null = null;
+
+function normalizeName(name: string): string {
+  return name.trim().replace(/\s+/g, ' ');
+}
 
 function makeKey(type: TaxonomyType, name: string): string {
-  return `${type}:${name.toLowerCase()}`;
+  return `${type}:${normalizeName(name).toLocaleLowerCase()}`;
+}
+
+function cacheItem(item: TaxonomyItem): TaxonomyItem {
+  taxonomyCache.set(makeKey(item.type, item.name), item);
+  return item;
+}
+
+function cachedItems(type?: TaxonomyType): TaxonomyItem[] {
+  return Array.from(taxonomyCache.values())
+    .filter(item => !type || item.type === type)
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/**
+ * Load the taxonomy collection once per server process. Subsequent analysis
+ * lookups use memory and do not issue one Firestore query per image tag.
+ */
+async function ensureTaxonomyCache(): Promise<void> {
+  if (cacheLoaded || isFirestoreQuotaCoolingDown()) return;
+  if (cacheLoadPromise) return cacheLoadPromise;
+
+  const db = getDb();
+  if (!db) {
+    cacheLoaded = true;
+    return;
+  }
+
+  cacheLoadPromise = (async () => {
+    try {
+      const snapshot = await db.collection('taxonomies').get();
+      for (const doc of snapshot.docs) {
+        cacheItem({ id: doc.id, ...(doc.data() as Omit<TaxonomyItem, 'id'>) });
+      }
+      cacheLoaded = true;
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        markFirestoreQuotaExceeded(error);
+      } else {
+        console.error('❌ Failed to warm taxonomy cache:', error.message);
+      }
+    } finally {
+      cacheLoadPromise = null;
+    }
+  })();
+
+  return cacheLoadPromise;
 }
 
 export async function listTaxonomies(
   type?: TaxonomyType
 ): Promise<{ success: boolean; items: TaxonomyItem[]; error?: string }> {
+  try {
+    await ensureTaxonomyCache();
+    return { success: true, items: cachedItems(type) };
+  } catch (error: any) {
+    return { success: false, items: cachedItems(type), error: error.message };
+  }
+}
+
+async function resolveOrCreateTaxonomy(
+  type: TaxonomyType,
+  name: string
+): Promise<TaxonomyItem | null> {
+  await ensureTaxonomyCache();
+
+  const normalized = normalizeName(name);
+  const key = makeKey(type, normalized);
+  const cached = taxonomyCache.get(key);
+  if (cached) return cached;
+
+  const now = new Date().toISOString();
+  const memoryItem: TaxonomyItem = {
+    id: key,
+    type,
+    name: normalized,
+    createdAt: now,
+    updatedAt: now
+  };
+
   const db = getDb();
+  if (!db || isFirestoreQuotaCoolingDown()) {
+    return cacheItem(memoryItem);
+  }
 
   try {
-    if (db) {
-      let query = db.collection('taxonomies') as FirebaseFirestore.Query;
-      if (type) {
-        query = query.where('type', '==', type);
-      }
-      const snapshot = await query.orderBy('name').get();
-      const items = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...(doc.data() as any)
-      })) as TaxonomyItem[];
-      return { success: true, items };
-    }
-
-    const items: TaxonomyItem[] = [];
-    for (const item of Array.from(inMemoryTaxonomies.values())) {
-      if (!type || item.type === type) {
-        items.push(item);
-      }
-    }
-    items.sort((a, b) => a.name.localeCompare(b.name));
-    return { success: true, items };
+    // The one-time cache load means this is reached only for genuinely new values.
+    const data = prepareForFirestore({
+      type,
+      name: normalized,
+      normalizedName: normalized.toLocaleLowerCase(),
+      createdAt: now,
+      updatedAt: now
+    });
+    const docRef = await db.collection('taxonomies').add(data);
+    return cacheItem({ id: docRef.id, ...(data as Omit<TaxonomyItem, 'id'>) });
   } catch (error: any) {
-    console.error('❌ listTaxonomies error:', error.message);
-    return { success: false, items: [], error: error.message };
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+      return cacheItem(memoryItem);
+    }
+    console.error('❌ getOrCreateTaxonomy error:', error.message);
+    return null;
   }
 }
 
@@ -64,58 +142,21 @@ export async function getOrCreateTaxonomy(
   type: TaxonomyType,
   name: string
 ): Promise<TaxonomyItem | null> {
-  const trimmed = name.trim();
-  if (!trimmed) return null;
+  const normalized = normalizeName(name);
+  if (!normalized) return null;
 
-  const db = getDb();
+  const key = makeKey(type, normalized);
+  const cached = taxonomyCache.get(key);
+  if (cached) return cached;
 
-  try {
-    if (db) {
-      const col = db.collection('taxonomies');
-      const existingSnap = await col
-        .where('type', '==', type)
-        .where('name', '==', trimmed)
-        .limit(1)
-        .get();
+  // Concurrent image workers requesting the same new tag share one operation.
+  const pending = pendingLookups.get(key);
+  if (pending) return pending;
 
-      if (!existingSnap.empty) {
-        const doc = existingSnap.docs[0];
-        return { id: doc.id, ...(doc.data() as any) } as TaxonomyItem;
-      }
-
-      const now = new Date().toISOString();
-      const data = prepareForFirestore({
-        type,
-        name: trimmed,
-        createdAt: now,
-        updatedAt: now
-      });
-      const docRef = await col.add(data);
-      return {
-        id: docRef.id,
-        ...(data as any)
-      } as TaxonomyItem;
-    }
-
-    // In-memory mode
-    const key = makeKey(type, trimmed);
-    const existing = inMemoryTaxonomies.get(key);
-    if (existing) return existing;
-
-    const now = new Date().toISOString();
-    const item: TaxonomyItem = {
-      id: key,
-      type,
-      name: trimmed,
-      createdAt: now,
-      updatedAt: now
-    };
-    inMemoryTaxonomies.set(key, item);
-    return item;
-  } catch (error: any) {
-    console.error('❌ getOrCreateTaxonomy error:', error.message);
-    return null;
-  }
+  const operation = resolveOrCreateTaxonomy(type, normalized)
+    .finally(() => pendingLookups.delete(key));
+  pendingLookups.set(key, operation);
+  return operation;
 }
 
 export async function createTaxonomy(
@@ -123,104 +164,84 @@ export async function createTaxonomy(
   name: string,
   description?: string
 ): Promise<{ success: boolean; item?: TaxonomyItem; error?: string }> {
-  const trimmed = name.trim();
-  if (!trimmed) {
-    return { success: false, error: 'Name is required' };
+  const normalized = normalizeName(name);
+  if (!normalized) return { success: false, error: 'Name is required' };
+
+  const item = await getOrCreateTaxonomy(type, normalized);
+  if (!item) return { success: false, error: 'Failed to create taxonomy' };
+
+  if (description && item.description !== description) {
+    const result = await updateTaxonomy(item.id, { description });
+    if (!result.success) return { success: false, item, error: result.error };
+    item.description = description;
   }
 
-  const db = getDb();
-
-  try {
-    if (db) {
-      const col = db.collection('taxonomies');
-      const now = new Date().toISOString();
-      const data = prepareForFirestore({
-        type,
-        name: trimmed,
-        description: description || null,
-        createdAt: now,
-        updatedAt: now
-      });
-      const docRef = await col.add(data);
-      const item: TaxonomyItem = {
-        id: docRef.id,
-        ...(data as any)
-      };
-      return { success: true, item };
-    }
-
-    const key = makeKey(type, trimmed);
-    const now = new Date().toISOString();
-    const item: TaxonomyItem = {
-      id: key,
-      type,
-      name: trimmed,
-      description,
-      createdAt: now,
-      updatedAt: now
-    };
-    inMemoryTaxonomies.set(key, item);
-    return { success: true, item };
-  } catch (error: any) {
-    console.error('❌ createTaxonomy error:', error.message);
-    return { success: false, error: error.message };
-  }
+  return { success: true, item };
 }
 
 export async function updateTaxonomy(
   id: string,
   updates: Partial<Pick<TaxonomyItem, 'name' | 'description'>>
 ): Promise<{ success: boolean; error?: string }> {
+  await ensureTaxonomyCache();
+  const existing = Array.from(taxonomyCache.values()).find(item => item.id === id);
+  const now = new Date().toISOString();
+  const normalizedUpdates = {
+    ...updates,
+    ...(updates.name ? { name: normalizeName(updates.name) } : {}),
+    updatedAt: now
+  };
+
   const db = getDb();
-
-  try {
-    if (db) {
-      const ref = db.collection('taxonomies').doc(id);
-      const now = new Date().toISOString();
-      const data = prepareForFirestore({
-        ...updates,
-        updatedAt: now
-      });
-      await ref.update(data);
-      return { success: true };
+  if (db && !isFirestoreQuotaCoolingDown()) {
+    try {
+      await db.collection('taxonomies').doc(id).update(
+        prepareForFirestore(normalizedUpdates)
+      );
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        markFirestoreQuotaExceeded(error);
+      } else {
+        return { success: false, error: error.message };
+      }
     }
-
-    // In-memory
-    const item = Array.from(inMemoryTaxonomies.values()).find(t => t.id === id);
-    if (!item) {
-      return { success: false, error: 'Item not found' };
-    }
-    Object.assign(item, updates, { updatedAt: new Date().toISOString() });
-    return { success: true };
-  } catch (error: any) {
-    console.error('❌ updateTaxonomy error:', error.message);
-    return { success: false, error: error.message };
   }
+
+  if (!existing) return { success: false, error: 'Item not found' };
+
+  taxonomyCache.delete(makeKey(existing.type, existing.name));
+  Object.assign(existing, normalizedUpdates);
+  cacheItem(existing);
+  return { success: true };
 }
 
 export async function deleteTaxonomy(
   id: string
 ): Promise<{ success: boolean; error?: string }> {
+  await ensureTaxonomyCache();
+  const existing = Array.from(taxonomyCache.values()).find(item => item.id === id);
   const db = getDb();
 
-  try {
-    if (db) {
+  if (db && !isFirestoreQuotaCoolingDown()) {
+    try {
       await db.collection('taxonomies').doc(id).delete();
-      return { success: true };
-    }
-
-    // In-memory
-    for (const [key, item] of Array.from(inMemoryTaxonomies.entries())) {
-      if (item.id === id) {
-        inMemoryTaxonomies.delete(key);
-        break;
+    } catch (error: any) {
+      if (isQuotaError(error)) {
+        markFirestoreQuotaExceeded(error);
+      } else {
+        return { success: false, error: error.message };
       }
     }
-
-    return { success: true };
-  } catch (error: any) {
-    console.error('❌ deleteTaxonomy error:', error.message);
-    return { success: false, error: error.message };
   }
+
+  if (existing) taxonomyCache.delete(makeKey(existing.type, existing.name));
+  return { success: true };
 }
 
+/** Useful for tests and explicit cache refreshes. */
+export function clearTaxonomyCache(): void {
+  taxonomyCache.clear();
+  pendingLookups.clear();
+  cacheLoaded = false;
+  cacheLoadPromise = null;
+}

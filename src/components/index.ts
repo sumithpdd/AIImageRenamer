@@ -7,3 +7,6 @@ export { ImageCard } from './ImageCard';
 export { ImagePreview } from './ImagePreview';
 export { CreateProjectModal } from './CreateProjectModal';
 export { JobViewer, JobIndicator } from './JobViewer';
+export { TagEditor } from './TagEditor';
+export { TagFilterBar } from './TagFilterBar';
+export { RunningJobsBar } from './RunningJobsBar';

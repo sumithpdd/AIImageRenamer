@@ -7,6 +7,11 @@ import { getDb, getAdmin } from '@/lib/firebase';
 import { inMemoryProjects, Project } from '@/lib/storage';
 import { deleteProjectImages } from './storage.service';
 import { prepareForFirestore } from '@/lib/utils/firestore.utils';
+import {
+  isQuotaError,
+  isFirestoreQuotaCoolingDown,
+  markFirestoreQuotaExceeded
+} from '@/lib/utils/firestore-quota';
 
 // Generate unique project ID
 function generateProjectId(): string {
@@ -34,57 +39,82 @@ export async function createProject(
   };
 
   try {
-    if (db) {
+    if (db && !isFirestoreQuotaCoolingDown()) {
       const cleanedData = prepareForFirestore(projectData);
       const docRef = await db.collection('projects').add(cleanedData);
+      const project = { id: docRef.id, ...projectData };
+      inMemoryProjects.set(docRef.id, projectData);
       console.log(`✅ Project created in Firestore: ${docRef.id}`);
-      return { success: true, project: { id: docRef.id, ...projectData } };
-    } else {
+      return { success: true, project };
+    }
+
+    const id = generateProjectId();
+    inMemoryProjects.set(id, projectData);
+    console.log(`✅ Project created in memory: ${id}`);
+    return { success: true, project: { id, ...projectData } };
+  } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
       const id = generateProjectId();
       inMemoryProjects.set(id, projectData);
-      console.log(`✅ Project created in memory: ${id}`);
+      console.warn(`⚠️  Firestore quota hit — project stored in memory only: ${id}`);
       return { success: true, project: { id, ...projectData } };
     }
-  } catch (error: any) {
     console.error('❌ Create project error:', error.message);
     return { success: false, error: error.message };
   }
+}
+
+function memoryProjectsList(): Array<Project & { id: string }> {
+  const projects = Array.from(inMemoryProjects.entries()).map(([id, data]) => ({
+    id,
+    ...data
+  }));
+  projects.sort((a, b) =>
+    new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+  );
+  return projects;
 }
 
 // Get all projects
 export async function getProjects(): Promise<{ 
   success: boolean; 
   projects?: Array<Project & { id: string }>; 
-  error?: string 
+  error?: string;
+  quotaExceeded?: boolean;
 }> {
   const db = getDb();
+
+  if (isFirestoreQuotaCoolingDown()) {
+    return { success: true, projects: memoryProjectsList(), quotaExceeded: true };
+  }
 
   try {
     if (db) {
       const snapshot = await db.collection('projects')
         .orderBy('updatedAt', 'desc')
+        .limit(100)
         .get();
       
       const projects = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data()
       })) as Array<Project & { id: string }>;
-      
-      return { success: true, projects };
-    } else {
-      const projects = Array.from(inMemoryProjects.entries()).map(([id, data]) => ({
-        id,
-        ...data
-      }));
-      
-      // Sort by updatedAt descending
-      projects.sort((a, b) => 
-        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-      );
+
+      // Keep memory cache warm for quota fallback
+      for (const project of projects) {
+        inMemoryProjects.set(project.id, project);
+      }
       
       return { success: true, projects };
     }
+
+    return { success: true, projects: memoryProjectsList() };
   } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+      return { success: true, projects: memoryProjectsList(), quotaExceeded: true };
+    }
     console.error('❌ Get projects error:', error.message);
     return { success: false, error: error.message };
   }
@@ -94,23 +124,34 @@ export async function getProjects(): Promise<{
 export async function getProject(
   projectId: string
 ): Promise<{ success: boolean; project?: Project & { id: string }; error?: string }> {
+  const cached = inMemoryProjects.get(projectId);
+  if (cached && isFirestoreQuotaCoolingDown()) {
+    return { success: true, project: { id: projectId, ...cached } };
+  }
+
   const db = getDb();
 
   try {
-    if (db) {
+    if (db && !isFirestoreQuotaCoolingDown()) {
       const doc = await db.collection('projects').doc(projectId).get();
       if (!doc.exists) {
+        if (cached) return { success: true, project: { id: projectId, ...cached } };
         return { success: false, error: 'Project not found' };
       }
-      return { success: true, project: { id: doc.id, ...doc.data() } as Project & { id: string } };
-    } else {
-      const data = inMemoryProjects.get(projectId);
-      if (!data) {
-        return { success: false, error: 'Project not found' };
-      }
-      return { success: true, project: { id: projectId, ...data } };
+      const project = { id: doc.id, ...doc.data() } as Project & { id: string };
+      inMemoryProjects.set(projectId, project);
+      return { success: true, project };
     }
+
+    if (cached) {
+      return { success: true, project: { id: projectId, ...cached } };
+    }
+    return { success: false, error: 'Project not found' };
   } catch (error: any) {
+    if (isQuotaError(error)) {
+      markFirestoreQuotaExceeded(error);
+      if (cached) return { success: true, project: { id: projectId, ...cached } };
+    }
     console.error('❌ Get project error:', error.message);
     return { success: false, error: error.message };
   }

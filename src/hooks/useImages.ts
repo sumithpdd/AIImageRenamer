@@ -306,6 +306,80 @@ export function useImages(
     }
   }, [showNotification]);
 
+  const updateImageTags = useCallback(async (
+    projectId: string,
+    imageId: string,
+    ops: { add?: string[]; remove?: string[]; set?: string[] }
+  ) => {
+    try {
+      const data = await api.updateImageTags(projectId, imageId, ops);
+      if (data.error || !data.success) {
+        showNotification(data.error || 'Failed to update tags', 'error');
+        return null;
+      }
+
+      setImages(prev => prev.map(img => {
+        if (img.id !== imageId) return img;
+        return {
+          ...img,
+          metadata: {
+            ...(img.metadata || {}),
+            tags: data.tags || [],
+            tagIds: data.tagIds || []
+          }
+        };
+      }));
+
+      return data;
+    } catch (err) {
+      showNotification('Failed to update tags', 'error');
+      return null;
+    }
+  }, [showNotification]);
+
+  const batchUpdateTags = useCallback(async (
+    projectId: string,
+    imageIds: string[],
+    ops: { add?: string[]; remove?: string[] }
+  ) => {
+    if (imageIds.length === 0) {
+      showNotification('Select images first', 'warning');
+      return null;
+    }
+
+    try {
+      const data = await api.batchUpdateImageTags(projectId, imageIds, ops);
+      if (data.error) {
+        showNotification(data.error, 'error');
+        return null;
+      }
+
+      const byId = new Map(
+        (data.results || [])
+          .filter((r: any) => r.success)
+          .map((r: any) => [r.imageId, r.tags as string[]])
+      );
+
+      setImages(prev => prev.map(img => {
+        const tags = byId.get(img.id);
+        if (!tags) return img;
+        return {
+          ...img,
+          metadata: {
+            ...(img.metadata || {}),
+            tags
+          }
+        };
+      }));
+
+      showNotification(`Updated tags on ${data.updated} image${data.updated === 1 ? '' : 's'}`);
+      return data;
+    } catch (err) {
+      showNotification('Failed to update tags', 'error');
+      return null;
+    }
+  }, [showNotification]);
+
   const toggleSelect = useCallback((imageId: string) => {
     setSelectedImages(prev => {
       const newSet = new Set(prev);
@@ -345,6 +419,8 @@ export function useImages(
     removeDuplicates,
     renameSingleImage,
     removeImage,
+    updateImageTags,
+    batchUpdateTags,
     toggleSelect,
     selectAll,
     resetImages

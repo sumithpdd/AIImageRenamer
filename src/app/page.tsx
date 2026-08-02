@@ -27,6 +27,7 @@ export default function Home() {
   const [view, setView] = useState('projects');
   const [filter, setFilter] = useState('all');
   const [search, setSearch] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [previewImage, setPreviewImage] = useState<any>(null);
   const [showCreateProject, setShowCreateProject] = useState(false);
   const [health, setHealth] = useState({ hasGemini: false, hasFirebase: false });
@@ -44,7 +45,7 @@ export default function Home() {
     refreshProject 
   } = useProjects(showNotification);
 
-  const fetchJobsRef = useRef<() => void>(() => {});
+  const watchJobRef = useRef<(jobId: string) => void>(() => {});
 
   const {
     images,
@@ -60,16 +61,23 @@ export default function Home() {
     removeDuplicates,
     renameSingleImage,
     removeImage,
+    updateImageTags,
+    batchUpdateTags,
     toggleSelect,
     selectAll,
     resetImages,
     clearPendingAction
-  } = useImages(showNotification, refreshProject, () => fetchJobsRef.current());
+  } = useImages(showNotification, refreshProject, (jobId) => watchJobRef.current(jobId));
 
   const handleJobComplete = useCallback(async (job: Job) => {
-    const action = ACTION_BY_JOB_TYPE[job.type];
-    if (action) {
-      clearPendingAction(action);
+    if (job.type === 'scan') {
+      clearPendingAction('scan');
+      clearPendingAction('rescan');
+    } else {
+      const action = ACTION_BY_JOB_TYPE[job.type];
+      if (action) {
+        clearPendingAction(action);
+      }
     }
     if (job.type === 'rename' && job.config?.usePatternClean) {
       clearPendingAction('clean');
@@ -101,12 +109,13 @@ export default function Home() {
     cancelJob,
     removeJob,
     setSelectedJob,
-    fetchJobs
+    fetchJobs,
+    watchJob
   } = useJobs(undefined, { onJobComplete: handleJobComplete });
 
-  fetchJobsRef.current = fetchJobs;
+  watchJobRef.current = watchJob;
 
-  // Initialize app
+  // Initialize once — jobs hook already fetches on mount; don't re-run when fetchJobs identity changes
   useEffect(() => {
     const init = async () => {
       try {
@@ -116,12 +125,40 @@ export default function Home() {
         console.error('Health check failed:', err);
       }
       loadProjects();
-      fetchJobs();
     };
     init();
-  }, [loadProjects, fetchJobs]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // Filter images based on current filter and search query
+  const projectTags = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const img of images) {
+      for (const tag of img.metadata?.tags || []) {
+        const name = String(tag).trim();
+        if (!name) continue;
+        counts.set(name, (counts.get(name) || 0) + 1);
+      }
+    }
+    return Array.from(counts.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  }, [images]);
+
+  const tagSuggestions = useMemo(
+    () => projectTags.map(t => t.name),
+    [projectTags]
+  );
+
+  // Keep preview in sync when image tags / metadata change
+  useEffect(() => {
+    setPreviewImage((prev: any) => {
+      if (!prev) return prev;
+      const fresh = images.find(img => img.id === prev.id);
+      return fresh || prev;
+    });
+  }, [images]);
+
+  // Filter images based on current filter, tags, and search query
   const filteredImages = useMemo(() => {
     let base = images;
 
@@ -145,6 +182,14 @@ export default function Home() {
         break;
     }
 
+    if (selectedTags.length > 0) {
+      const required = selectedTags.map(t => t.toLowerCase());
+      base = base.filter(img => {
+        const imgTags = (img.metadata?.tags || []).map((t: string) => t.toLowerCase());
+        return required.every(t => imgTags.includes(t));
+      });
+    }
+
     if (!search.trim()) return base;
 
     const q = search.toLowerCase();
@@ -152,20 +197,28 @@ export default function Home() {
       const nameMatch =
         img.currentName?.toLowerCase().includes(q) ||
         img.originalName?.toLowerCase().includes(q) ||
-        img.suggestedName?.toLowerCase().includes(q);
+        img.suggestedName?.toLowerCase().includes(q) ||
+        img.relativePath?.toLowerCase().includes(q) ||
+        img.relativeDir?.toLowerCase().includes(q);
 
       const title = img.metadata?.title || '';
       const desc = img.metadata?.description || img.aiDescription || '';
       const tags = (img.metadata?.tags || []).join(' ');
+      const category = img.metadata?.category || '';
+      const subcategory = img.metadata?.subcategory || '';
+      const scene = img.metadata?.scene || '';
 
       const metaMatch =
         title.toLowerCase().includes(q) ||
         desc.toLowerCase().includes(q) ||
-        tags.toLowerCase().includes(q);
+        tags.toLowerCase().includes(q) ||
+        category.toLowerCase().includes(q) ||
+        subcategory.toLowerCase().includes(q) ||
+        scene.toLowerCase().includes(q);
 
       return nameMatch || metaMatch;
     });
-  }, [images, filter, search]);
+  }, [images, filter, search, selectedTags]);
 
   const stats = useMemo(() => ({
     total: images.length,
@@ -199,6 +252,33 @@ export default function Home() {
     setCurrentProject(null);
     resetImages();
     setSearch('');
+    setSelectedTags([]);
+  };
+
+  const handleToggleTagFilter = (tag: string) => {
+    setSelectedTags(prev => {
+      const key = tag.toLowerCase();
+      const exists = prev.some(t => t.toLowerCase() === key);
+      if (exists) return prev.filter(t => t.toLowerCase() !== key);
+      return [...prev, tag];
+    });
+  };
+
+  const handleClearTagFilters = () => setSelectedTags([]);
+
+  const handleBatchAddTag = async (tag: string) => {
+    if (!currentProject) return;
+    await batchUpdateTags(currentProject.id, Array.from(selectedImages), { add: [tag] });
+  };
+
+  const handlePreviewAddTag = async (tag: string) => {
+    if (!currentProject || !previewImage) return;
+    await updateImageTags(currentProject.id, previewImage.id, { add: [tag] });
+  };
+
+  const handlePreviewRemoveTag = async (tag: string) => {
+    if (!currentProject || !previewImage) return;
+    await updateImageTags(currentProject.id, previewImage.id, { remove: [tag] });
   };
 
   const handleDeleteProject = async (projectId: string) => {
@@ -314,6 +394,11 @@ export default function Home() {
               setFilter={setFilter}
               search={search}
               setSearch={setSearch}
+              selectedTags={selectedTags}
+              projectTags={projectTags}
+              onToggleTagFilter={handleToggleTagFilter}
+              onClearTagFilters={handleClearTagFilters}
+              onBatchAddTag={handleBatchAddTag}
               selectedImages={selectedImages}
               loading={imagesLoading}
               isBusy={isBusy}
@@ -349,6 +434,7 @@ export default function Home() {
         {previewImage && (
           <ImagePreview
             image={previewImage}
+            tagSuggestions={tagSuggestions}
             onClose={() => setPreviewImage(null)}
             onRename={(newName: string) => {
               handleRenameSingle(previewImage, newName);
@@ -356,6 +442,12 @@ export default function Home() {
             }}
             onDelete={() => {
               handleDeleteImage(previewImage);
+              setPreviewImage(null);
+            }}
+            onAddTag={handlePreviewAddTag}
+            onRemoveTag={handlePreviewRemoveTag}
+            onFilterTag={(tag) => {
+              handleToggleTagFilter(tag);
               setPreviewImage(null);
             }}
           />

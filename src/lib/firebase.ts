@@ -51,14 +51,18 @@ export async function initFirebase() {
     storage = admin.storage();
     bucket = storage.bucket(STORAGE_BUCKET);
     
-    // Test Firestore connection
+    // Skip write/delete ping — it burns free-tier quota on every cold start
     try {
-      await db.collection('_test').doc('_ping').set({ timestamp: new Date() });
-      await db.collection('_test').doc('_ping').delete();
-      console.log('✅ Firestore connection verified (undefined properties ignored)');
+      // Lightweight read of a known collection is enough to verify connectivity
+      await db.collection('projects').limit(1).get();
+      console.log('✅ Firestore connection verified');
     } catch (e) {
-      console.log('⚠️  Firestore connection failed, using in-memory storage');
-      db = null;
+      if ((e as any)?.message?.includes('RESOURCE_EXHAUSTED') || String((e as any)?.code) === '8') {
+        console.warn('⚠️  Firestore quota exceeded at init — using in-memory fallbacks where needed');
+      } else {
+        console.log('⚠️  Firestore connection failed, using in-memory storage');
+        db = null;
+      }
     }
     
     // Test Storage connection

@@ -2,6 +2,11 @@
 
 import { getDb } from '@/lib/firebase';
 import { prepareForFirestore } from '@/lib/utils/firestore.utils';
+import {
+  isQuotaError,
+  isFirestoreQuotaCoolingDown,
+  markFirestoreQuotaExceeded
+} from '@/lib/utils/firestore-quota';
 
 export type JobType = 'scan' | 'analyze' | 'rename' | 'cleanup';
 export type JobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -46,8 +51,61 @@ export interface Job {
   config?: Record<string, any>;
 }
 
-// In-memory job storage
-export const inMemoryJobs = new Map<string, Job>();
+export const DEFAULT_JOB_LIST_LIMIT = 50;
+const PROGRESS_FLUSH_MS = 2500;
+
+// Persist across Next.js route compiles / HMR so workers and GET /api/jobs share one Map
+type JobsGlobal = {
+  __aiImageRenamerJobs?: Map<string, Job>;
+  __aiImageRenamerJobProgressFlush?: Map<string, number>;
+};
+const jobsGlobal = globalThis as typeof globalThis & JobsGlobal;
+
+// In-memory job storage (source of truth while workers run)
+export const inMemoryJobs: Map<string, Job> =
+  jobsGlobal.__aiImageRenamerJobs ?? new Map<string, Job>();
+jobsGlobal.__aiImageRenamerJobs = inMemoryJobs;
+
+// Throttle Firestore progress writes per job
+const lastProgressFlushAt: Map<string, number> =
+  jobsGlobal.__aiImageRenamerJobProgressFlush ?? new Map<string, number>();
+jobsGlobal.__aiImageRenamerJobProgressFlush = lastProgressFlushAt;
+
+function sortJobsNewestFirst(jobs: Job[]): Job[] {
+  return jobs.sort((a, b) =>
+    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+}
+
+function getMemoryJobs(limit = DEFAULT_JOB_LIST_LIMIT): Job[] {
+  return sortJobsNewestFirst(Array.from(inMemoryJobs.values())).slice(0, limit);
+}
+
+function getMemoryProjectJobs(projectId: string, limit = DEFAULT_JOB_LIST_LIMIT): Job[] {
+  return sortJobsNewestFirst(
+    Array.from(inMemoryJobs.values()).filter(j => j.projectId === projectId)
+  ).slice(0, limit);
+}
+
+function noteFirestoreError(error: unknown, context: string): void {
+  if (isQuotaError(error)) {
+    markFirestoreQuotaExceeded(error);
+    return;
+  }
+  console.error(`❌ ${context}:`, (error as any)?.message || error);
+}
+
+async function writeJobDoc(jobId: string, data: Record<string, any>, force = false): Promise<void> {
+  if (!force && isFirestoreQuotaCoolingDown()) return;
+  const db = getDb();
+  if (!db) return;
+  try {
+    // merge:true so completion still persists if the initial create never landed
+    await db.collection('jobs').doc(jobId).set(prepareForFirestore(data), { merge: true });
+  } catch (e: any) {
+    noteFirestoreError(e, 'Failed to update job in Firestore');
+  }
+}
 
 // Generate unique job ID
 export function generateJobId(): string {
@@ -86,14 +144,14 @@ export async function createJob(params: {
   inMemoryJobs.set(job.id, job);
   console.log(`📋 Job created: ${job.id} (${job.type})`);
 
-  // Persist to Firestore if available
-  const db = getDb();
-  if (db) {
-    try {
-      const data = prepareForFirestore(job);
-      await db.collection('jobs').doc(job.id).set(data);
-    } catch (e: any) {
-      console.error('❌ Failed to persist job to Firestore:', e.message);
+  if (!isFirestoreQuotaCoolingDown()) {
+    const db = getDb();
+    if (db) {
+      try {
+        await db.collection('jobs').doc(job.id).set(prepareForFirestore(job));
+      } catch (e: any) {
+        noteFirestoreError(e, 'Failed to persist job to Firestore');
+      }
     }
   }
 
@@ -109,19 +167,11 @@ export async function startJob(jobId: string): Promise<Job | null> {
   job.startedAt = new Date().toISOString();
   job.statusMessage = `Processing ${job.type}...`;
   
-  const db = getDb();
-  if (db) {
-    try {
-      const update = prepareForFirestore({
-        status: job.status,
-        startedAt: job.startedAt,
-        statusMessage: job.statusMessage
-      });
-      await db.collection('jobs').doc(job.id).update(update);
-    } catch (e: any) {
-      console.error('❌ Failed to update job status in Firestore:', e.message);
-    }
-  }
+  await writeJobDoc(jobId, {
+    status: job.status,
+    startedAt: job.startedAt,
+    statusMessage: job.statusMessage
+  });
 
   console.log(`▶️ Job started: ${job.id}`);
   return job;
@@ -135,23 +185,28 @@ export async function setJobTotalItems(jobId: string, totalItems: number): Promi
   job.totalItems = totalItems;
   job.statusMessage = `Processing ${totalItems} items...`;
 
-  const db = getDb();
-  if (db) {
-    try {
-      const data = prepareForFirestore({
-        totalItems: job.totalItems,
-        statusMessage: job.statusMessage
-      });
-      await db.collection('jobs').doc(job.id).update(data);
-    } catch (e: any) {
-      console.error('❌ Failed to update job totalItems in Firestore:', e.message);
-    }
-  }
+  await writeJobDoc(jobId, {
+    totalItems: job.totalItems,
+    statusMessage: job.statusMessage
+  });
 
   return job;
 }
 
-// Update job progress
+function buildProgressPayload(job: Job) {
+  return {
+    progress: job.progress,
+    processedItems: job.processedItems,
+    successCount: job.successCount,
+    errorCount: job.errorCount,
+    statusMessage: job.statusMessage,
+    // Cap targets written to Firestore to avoid huge docs + write cost
+    targets: job.targets.slice(-100),
+    errors: job.errors.slice(-50)
+  };
+}
+
+// Update job progress (in-memory always; Firestore throttled)
 export async function updateJobProgress(jobId: string, update: {
   processedItems?: number;
   successCount?: number;
@@ -163,13 +218,16 @@ export async function updateJobProgress(jobId: string, update: {
     error?: string;
     data?: Record<string, any>;
   };
+  flush?: boolean;
 }): Promise<Job | null> {
   const job = inMemoryJobs.get(jobId);
   if (!job) return null;
   
   if (update.processedItems !== undefined) {
     job.processedItems = update.processedItems;
-    job.progress = Math.round((update.processedItems / job.totalItems) * 100);
+    job.progress = job.totalItems > 0
+      ? Math.round((update.processedItems / job.totalItems) * 100)
+      : 0;
   }
   if (update.successCount !== undefined) job.successCount = update.successCount;
   if (update.errorCount !== undefined) job.errorCount = update.errorCount;
@@ -194,23 +252,13 @@ export async function updateJobProgress(jobId: string, update: {
     }
   }
 
-  const db = getDb();
-  if (db) {
-    try {
-      const partial: any = {
-        progress: job.progress,
-        processedItems: job.processedItems,
-        successCount: job.successCount,
-        errorCount: job.errorCount,
-        statusMessage: job.statusMessage,
-        targets: job.targets,
-        errors: job.errors
-      };
-      const data = prepareForFirestore(partial);
-      await db.collection('jobs').doc(job.id).update(data);
-    } catch (e: any) {
-      console.error('❌ Failed to update job progress in Firestore:', e.message);
-    }
+  const now = Date.now();
+  const lastFlush = lastProgressFlushAt.get(jobId) || 0;
+  const shouldFlush = update.flush || now - lastFlush >= PROGRESS_FLUSH_MS;
+
+  if (shouldFlush) {
+    lastProgressFlushAt.set(jobId, now);
+    await writeJobDoc(jobId, buildProgressPayload(job));
   }
   
   return job;
@@ -237,33 +285,31 @@ export async function completeJob(jobId: string, params: {
       ? `Completed: ${job.successCount} succeeded, ${job.errorCount} failed`
       : `Failed: ${job.errorCount} errors`);
 
-  const db = getDb();
-  if (db) {
-    try {
-      const update: any = {
-        status: job.status,
-        completedAt: job.completedAt,
-        progress: job.progress,
-        duration: job.duration,
-        statusMessage: job.statusMessage,
-        successCount: job.successCount,
-        errorCount: job.errorCount,
-        targets: job.targets,
-        errors: job.errors
-      };
-      const data = prepareForFirestore(update);
-      await db.collection('jobs').doc(job.id).update(data);
-    } catch (e: any) {
-      console.error('❌ Failed to complete job in Firestore:', e.message);
-    }
-  }
+  lastProgressFlushAt.delete(jobId);
+
+  // Persist full job so list/detail endpoints see completion even if create never wrote
+  await writeJobDoc(jobId, {
+    ...job,
+    targets: job.targets.slice(-100),
+    errors: job.errors.slice(-50)
+  }, true);
   
   console.log(`${params.status === 'completed' ? '✅' : '❌'} Job ${params.status}: ${job.id}`);
   return job;
 }
 
 // Get all jobs for a project
-export async function getProjectJobs(projectId: string): Promise<Job[]> {
+export async function getProjectJobs(
+  projectId: string,
+  limit = DEFAULT_JOB_LIST_LIMIT
+): Promise<Job[]> {
+  // Prefer live in-memory jobs while anything is running (avoids stale Firestore + quota burn)
+  const memory = getMemoryProjectJobs(projectId, limit);
+  const hasActive = memory.some(j => j.status === 'running' || j.status === 'pending');
+  if (hasActive || isFirestoreQuotaCoolingDown()) {
+    return memory;
+  }
+
   const db = getDb();
   if (db) {
     try {
@@ -271,55 +317,61 @@ export async function getProjectJobs(projectId: string): Promise<Job[]> {
         .collection('jobs')
         .where('projectId', '==', projectId)
         .orderBy('createdAt', 'desc')
+        .limit(limit)
         .get();
-      const jobs: Job[] = snap.docs.map(d => d.data() as Job);
+      const jobs: Job[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as Job));
 
-      // Refresh in-memory cache
       for (const job of jobs) {
+        // Don't overwrite a newer in-memory running job with older Firestore snapshot
+        const existing = inMemoryJobs.get(job.id);
+        if (existing && (existing.status === 'running' || existing.status === 'pending')) {
+          continue;
+        }
         inMemoryJobs.set(job.id, job);
       }
 
-      return jobs;
+      return getMemoryProjectJobs(projectId, limit);
     } catch (e: any) {
-      console.error('❌ Failed to load jobs from Firestore:', e.message);
+      noteFirestoreError(e, 'Failed to load jobs from Firestore');
     }
   }
 
-  const jobs: Job[] = [];
-  for (const job of Array.from(inMemoryJobs.values())) {
-    if (job.projectId === projectId) {
-      jobs.push(job);
-    }
-  }
-  return jobs.sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  return memory;
 }
 
 // Get all jobs
-export async function getAllJobs(): Promise<Job[]> {
+export async function getAllJobs(limit = DEFAULT_JOB_LIST_LIMIT): Promise<Job[]> {
+  const memory = getMemoryJobs(limit);
+  const hasActive = memory.some(j => j.status === 'running' || j.status === 'pending');
+  if (hasActive || isFirestoreQuotaCoolingDown()) {
+    return memory;
+  }
+
   const db = getDb();
   if (db) {
     try {
       const snap = await db
         .collection('jobs')
         .orderBy('createdAt', 'desc')
+        .limit(limit)
         .get();
-      const jobs: Job[] = snap.docs.map(d => d.data() as Job);
+      const jobs: Job[] = snap.docs.map(d => ({ id: d.id, ...d.data() } as Job));
 
       for (const job of jobs) {
+        const existing = inMemoryJobs.get(job.id);
+        if (existing && (existing.status === 'running' || existing.status === 'pending')) {
+          continue;
+        }
         inMemoryJobs.set(job.id, job);
       }
 
-      return jobs;
+      return getMemoryJobs(limit);
     } catch (e: any) {
-      console.error('❌ Failed to load all jobs from Firestore:', e.message);
+      noteFirestoreError(e, 'Failed to load all jobs from Firestore');
     }
   }
 
-  return Array.from(inMemoryJobs.values()).sort((a, b) =>
-    new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
+  return memory;
 }
 
 // Check if a job was cancelled (reads in-memory first for speed during workers)
@@ -340,21 +392,30 @@ export function shouldStopJob(jobId: string): boolean {
 
 // Get a single job
 export async function getJob(jobId: string): Promise<Job | null> {
+  const cached = inMemoryJobs.get(jobId);
+  if (cached && (cached.status === 'running' || cached.status === 'pending' || isFirestoreQuotaCoolingDown())) {
+    return cached;
+  }
+
   const db = getDb();
-  if (db) {
+  if (db && !isFirestoreQuotaCoolingDown()) {
     try {
       const doc = await db.collection('jobs').doc(jobId).get();
       if (doc.exists) {
-        const job = doc.data() as Job;
+        const job = { id: doc.id, ...doc.data() } as Job;
+        const existing = inMemoryJobs.get(job.id);
+        if (existing && (existing.status === 'running' || existing.status === 'pending')) {
+          return existing;
+        }
         inMemoryJobs.set(job.id, job);
         return job;
       }
     } catch (e: any) {
-      console.error('❌ Failed to get job from Firestore:', e.message);
+      noteFirestoreError(e, 'Failed to get job from Firestore');
     }
   }
 
-  return inMemoryJobs.get(jobId) || null;
+  return cached || null;
 }
 
 // Format job type for display

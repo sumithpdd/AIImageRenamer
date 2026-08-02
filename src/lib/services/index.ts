@@ -34,6 +34,12 @@ export {
   deleteTaxonomy
 } from './taxonomy.service';
 
+export {
+  setImageTags,
+  updateImageTags,
+  batchUpdateImageTags
+} from './tagging.service';
+
 // Storage operations
 export {
   uploadImage,

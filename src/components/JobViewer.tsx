@@ -301,9 +301,22 @@ function JobDetails({ job, onCancel, onRemove }: JobDetailsProps) {
       {/* Targets List */}
       {targets.length > 0 && (
         <div className="job-targets-section">
-          <h4>Targets ({targets.length})</h4>
+          <h4>
+            Targets ({targets.length})
+            {isRunning && targets.some(t => t.status === 'running') && (
+              <span className="targets-running-count">
+                {' '}· {targets.filter(t => t.status === 'running').length} active now
+              </span>
+            )}
+          </h4>
           <div className="targets-list">
-            {targets.slice(0, 50).map((target, idx) => (
+            {[...targets]
+              .sort((a, b) => {
+                const rank = (s: string) => (s === 'running' ? 0 : s === 'pending' ? 1 : 2);
+                return rank(a.status) - rank(b.status);
+              })
+              .slice(0, 50)
+              .map((target, idx) => (
               <div key={idx} className={`target-item ${target.status}`}>
                 <span className="target-status-icon">
                   {target.status === 'completed' ? '✓' : 

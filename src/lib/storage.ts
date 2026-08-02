@@ -32,6 +32,10 @@ export interface ImageMetadata {
   objects?: string[];
   style?: string;
   mood?: string;
+  textVisible?: boolean;
+  scene?: string;
+  /** Relative folder the file was scanned from */
+  sourceFolder?: string | null;
 
   // Taxonomy references (IDs into the central taxonomy collection)
   tagIds?: string[];
@@ -56,6 +60,10 @@ export interface ImageData {
   originalName: string;
   currentName: string;
   path: string;
+  /** Path relative to the project folder root (nested folders preserved) */
+  relativePath?: string;
+  /** Relative parent folder within the project (empty string for root files) */
+  relativeDir?: string;
   size: number;
   hash: string;
   extension: string;
@@ -85,9 +93,14 @@ export interface ImageData {
 export const inMemoryProjects = new Map<string, Project>();
 export const inMemoryImages = new Map<string, ImageData>();
 
-// Helper to generate consistent image ID
-export function generateImageId(hash: string, originalName: string): string {
-  return `${hash.substring(0, 8)}_${originalName.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 50)}`;
+// Helper to generate consistent image ID (includes relative path so nested files stay unique)
+export function generateImageId(hash: string, originalName: string, relativePath?: string): string {
+  const key = relativePath || originalName;
+  const sanitized = key
+    .replace(/[\\/]/g, '_')
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .substring(0, 80);
+  return `${hash.substring(0, 8)}_${sanitized}`;
 }
 
 // Helper to get images for a project

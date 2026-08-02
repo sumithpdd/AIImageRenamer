@@ -151,6 +151,44 @@ export const removeJob = async (jobId: string) => {
   return res.json();
 };
 
+// Tags / taxonomy
+export const fetchTaxonomies = async (type?: 'tag' | 'color' | 'category' | 'style' | 'mood') => {
+  const query = type ? `?type=${type}` : '';
+  const res = await fetch(`${API_BASE}/taxonomies${query}`);
+  return res.json();
+};
+
+export const fetchProjectTags = async (projectId: string) => {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/tags`);
+  return res.json();
+};
+
+export const updateImageTags = async (
+  projectId: string,
+  imageId: string,
+  ops: { add?: string[]; remove?: string[]; set?: string[] }
+) => {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/images/${imageId}/tags`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(ops)
+  });
+  return res.json();
+};
+
+export const batchUpdateImageTags = async (
+  projectId: string,
+  imageIds: string[],
+  ops: { add?: string[]; remove?: string[] }
+) => {
+  const res = await fetch(`${API_BASE}/projects/${projectId}/tags`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageIds, ...ops })
+  });
+  return res.json();
+};
+
 // Helpers
 export const getImageUrl = (imagePath: string) => {
   return `${API_BASE}/image?path=${encodeURIComponent(imagePath)}`;

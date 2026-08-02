@@ -14,7 +14,10 @@ export async function GET() {
       return NextResponse.json({ error: result.error }, { status: 500 });
     }
 
-    return NextResponse.json({ projects: result.projects });
+    return NextResponse.json({
+      projects: result.projects,
+      quotaExceeded: result.quotaExceeded || false
+    });
   } catch (error: any) {
     console.error('Get projects error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

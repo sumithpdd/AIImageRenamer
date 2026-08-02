@@ -60,6 +60,22 @@ service firebase.storage {
 
 > ⚠️ For production, lock these rules down and require auth.
 
+### 4b. Firestore quotas (free tier)
+
+Firestore's free (Spark) plan allocates roughly **50,000 reads**, **20,000 writes**, and **20,000 deletes per day**, **shared globally across the whole Firebase project** and reset daily. Large scans/analyses can hit these limits and log:
+
+```text
+❌ RESOURCE_EXHAUSTED: Quota exceeded.
+```
+
+The app mitigates this automatically (quota cooldown, throttled job writes, in-memory fallback, no idle polling — see `docs/architecture-and-jobs.md` → *Firestore Usage, Quotas & Cost Controls*). If you hit the limit:
+
+- **Wait** for the daily reset, or
+- **Enable billing (Blaze plan)** for higher limits, or
+- Run large **AI analyze** batches spread across days.
+
+You can also run fully **in-memory** (no `serviceAccountKey.json`) for local testing, which uses no Firestore quota at all.
+
 ### 5. Run the dev server
 
 ```bash
